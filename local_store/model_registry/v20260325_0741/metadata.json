@@ -1,0 +1,26 @@
+{
+  "version": "v20260325_0741",
+  "trained_at": "2026-03-25T07:41:15.493268",
+  "training_rows": 9454,
+  "fraud_rate": 0.07425779225586733,
+  "auc_roc": 0.6699,
+  "precision": 0.2966,
+  "recall": 0.2318,
+  "f1_score": 0.2602,
+  "threshold": 0.6841,
+  "feature_names": [
+    "velocity_1h",
+    "velocity_6h",
+    "velocity_24h",
+    "amount_ratio",
+    "device_trust_score",
+    "ip_fraud_history",
+    "merchant_risk_score",
+    "hour_of_day",
+    "day_of_week",
+    "is_new_device",
+    "is_late_night",
+    "is_new_user"
+  ],
+  "is_champion": false
+}

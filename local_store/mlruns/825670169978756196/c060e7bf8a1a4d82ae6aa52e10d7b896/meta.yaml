@@ -1,0 +1,15 @@
+artifact_uri: file:C:/Users/Swateya Gupta/Downloads/fraudshield_mvp/fraudshield/data/mlruns/825670169978756196/c060e7bf8a1a4d82ae6aa52e10d7b896/artifacts
+end_time: 1774472944689
+entry_point_name: ''
+experiment_id: '825670169978756196'
+lifecycle_stage: active
+run_id: c060e7bf8a1a4d82ae6aa52e10d7b896
+run_name: v20260325_2108
+run_uuid: c060e7bf8a1a4d82ae6aa52e10d7b896
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1774472933697
+status: 3
+tags: []
+user_id: Swateya Gupta

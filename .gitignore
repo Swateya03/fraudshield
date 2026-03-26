@@ -1,0 +1,16 @@
+# .gitignore
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+local_store/fraud.db
+local_store/mlruns/
+local_store/model_registry/
+*.pkl
+.env
+notebooks/.ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+.pytest_cache/

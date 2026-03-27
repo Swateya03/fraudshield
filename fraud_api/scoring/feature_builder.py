@@ -41,11 +41,15 @@ class FeatureBuilder:
     Online features come from Redis (sub-1ms).
     Offline features come from Redis hash set by pipeline-service (sub-1ms).
     Velocity from TransactionRepository (uses index, ~1ms).
+
+    Circuit breaker: if Redis fails once, skip it for the rest of the request
+    to avoid accumulating timeout penalties (~1s per failed call).
     """
 
     def __init__(self, txn_repo=None):
         self._txn_repo = txn_repo  # optional, for DB velocity fallback
         self._redis    = get_redis()
+        self._redis_alive = True
 
     def build(self, txn: Transaction, user: User,
               merchant: Optional[Merchant] = None,
@@ -123,18 +127,25 @@ class FeatureBuilder:
 
     def _get_velocity(self, user_id: str, window: str) -> float:
         """Read velocity from Redis INCR counter."""
+        if not self._redis_alive:
+            return self._velocity_db_fallback(user_id, window)
         key = f"velocity:{user_id}:{window}"
         try:
             val = self._redis.get(key)
             return float(val) if val else 0.0
         except Exception:
-            # Redis down → fall back to DB (slower but correct)
-            if self._txn_repo and window == "1h":
-                return float(self._txn_repo.get_velocity(user_id, 1))
-            return 0.0
+            self._redis_alive = False
+            return self._velocity_db_fallback(user_id, window)
+
+    def _velocity_db_fallback(self, user_id: str, window: str) -> float:
+        if self._txn_repo and window == "1h":
+            return float(self._txn_repo.get_velocity(user_id, 1))
+        return 0.0
 
     def _increment_velocity(self, user_id: str) -> None:
         """Increment velocity counters. TTL auto-expires the window."""
+        if not self._redis_alive:
+            return
         try:
             pipe = self._redis.pipeline()
             pipe.incr(f"velocity:{user_id}:1h");  pipe.expire(f"velocity:{user_id}:1h",  3600)
@@ -142,18 +153,20 @@ class FeatureBuilder:
             pipe.incr(f"velocity:{user_id}:24h"); pipe.expire(f"velocity:{user_id}:24h", 86400)
             pipe.execute()
         except Exception:
-            pass  # velocity update failure is non-critical
+            self._redis_alive = False
 
     def _get_offline_features(self, user_id: str) -> dict:
         """
         Read batch-computed features from Redis hash.
         Set by pipeline-service/features/precompute.py daily.
         """
+        if not self._redis_alive:
+            return {}
         key = f"features:offline:{user_id}"
         try:
             raw = self._redis.get(key)
             if raw:
                 return json.loads(raw)
         except Exception:
-            pass
-        return {}  # fallback: all zeros (safe default)
+            self._redis_alive = False
+        return {}

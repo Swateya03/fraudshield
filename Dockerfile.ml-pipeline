@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY fraudshield_core/  ./fraudshield_core/
+COPY ml_pipeline/      ./ml_pipeline/
+COPY scripts/          ./scripts/
+COPY .env              ./.env
+
+RUN mkdir -p local_store/model_registry local_store/mlruns
+
+# Default: run drift check
+# Override with: docker run ... python scripts/train_model.py
+CMD ["python", "scripts/check_drift.py"]

@@ -1,0 +1,104 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+
+  # ── Job 1: Unit tests — zero DB, zero Redis, instant ──────────────────────
+  unit-tests:
+    name: Unit tests (Repository + Scoring)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
+        env:
+          DB_URL: "sqlite:///local_store/test.db"
+          REDIS_URL: "redis://localhost:6379"
+          API_TOKEN: "test_token_123"
+          MODEL_REGISTRY_PATH: "local_store/model_registry"
+          CURRENT_MODEL_VERSION: "v1.0.0"
+
+  # ── Job 2: Integration test — real SQLite, mocked Redis ───────────────────
+  integration-tests:
+    name: Integration tests (API endpoints)
+    runs-on: ubuntu-latest
+    needs: unit-tests          # only runs if unit tests pass
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Seed test database
+        run: python scripts/seed_data.py
+        env:
+          DB_URL: "sqlite:///local_store/test_integration.db"
+          REDIS_URL: "redis://localhost:6379"
+
+      - name: Run API integration tests
+        run: pytest tests/test_api.py -v --tb=short
+        env:
+          DB_URL: "sqlite:///local_store/test_integration.db"
+          REDIS_URL: "redis://localhost:6379"
+          API_TOKEN: "test_token_123"
+          MODEL_REGISTRY_PATH: "local_store/model_registry"
+          FRAUD_THRESHOLD: "0.50"
+          REVIEW_THRESHOLD: "0.20"
+
+  # ── Job 3: Data quality gate — simulator produces valid data ──────────────
+  data-quality:
+    name: Simulator data quality check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run simulator quality gate
+        run: |
+          python -c "
+          from ml_pipeline.data.simulator import (
+              generate_users, generate_devices,
+              generate_transactions, validate
+          )
+          users  = generate_users(50, seed=42)
+          devs   = generate_devices(users, seed=43)
+          txns, labels = generate_transactions(users, devs, n_days=30, seed=44)
+          result = validate(txns, labels)
+          print(f'Amount ratio:    {result[\"amount_ratio\"]}x')
+          print(f'IP signal:       {result[\"fraud_ip_rate_pct\"]}%')
+          print(f'Device signal:   {result[\"fraud_dev_rate_pct\"]}%')
+          print(f'All pass:        {result[\"ALL_PASS\"]}')
+          assert result['ALL_PASS'], f'Data quality gate FAILED: {result}'
+          print('Data quality gate PASSED')
+          "

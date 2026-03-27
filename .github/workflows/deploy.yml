@@ -1,0 +1,88 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: ["main"]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/fraudshield
+
+jobs:
+
+  # ── Must pass tests first ─────────────────────────────────────────────────
+  run-tests:
+    name: Run tests before build
+    uses: ./.github/workflows/test.yml   # reuse the test workflow
+
+  # ── Build fraud-api Docker image ──────────────────────────────────────────
+  build-fraud-api:
+    name: Build fraud-api image
+    runs-on: ubuntu-latest
+    needs: run-tests
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push fraud-api
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.fraud-api
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-fraud-api:latest
+            ${{ env.IMAGE_PREFIX }}-fraud-api:${{ github.sha }}
+
+  # ── Build ml-pipeline image ───────────────────────────────────────────────
+  build-ml-pipeline:
+    name: Build ml-pipeline image
+    runs-on: ubuntu-latest
+    needs: run-tests
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ml-pipeline
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.ml-pipeline
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-ml-pipeline:latest
+            ${{ env.IMAGE_PREFIX }}-ml-pipeline:${{ github.sha }}
+
+  # ── Summary ───────────────────────────────────────────────────────────────
+  summary:
+    name: Deployment summary
+    runs-on: ubuntu-latest
+    needs: [build-fraud-api, build-ml-pipeline]
+
+    steps:
+      - name: Print image tags
+        run: |
+          echo "Deployed images:"
+          echo "  fraud-api:   ${{ env.IMAGE_PREFIX }}-fraud-api:${{ github.sha }}"
+          echo "  ml-pipeline: ${{ env.IMAGE_PREFIX }}-ml-pipeline:${{ github.sha }}"
+          echo "Git SHA: ${{ github.sha }}"

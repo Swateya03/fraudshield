@@ -4,9 +4,11 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
-local_store/fraud.db
+local_store/fraud.db*
+local_store/test_api.db
 local_store/mlruns/
 local_store/model_registry/
+data/
 *.pkl
 .env
 notebooks/.ipynb_checkpoints/

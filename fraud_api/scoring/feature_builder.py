@@ -12,6 +12,7 @@ This is the critical path — must complete in <10ms.
 """
 
 import json
+import math
 from datetime import datetime
 from typing import Optional
 
@@ -119,6 +120,37 @@ class FeatureBuilder:
 
         # ── Derived features ───────────────────────────────────────
         fv.amount_ratio = (txn.amount / max(fv.user_avg_amount, 1.0))
+
+        # ── amount_zscore & geo_mismatch ──────────────────────────
+        std_amount = offline.get("std_amount", 1.0) or 1.0
+        fv.amount_zscore = (txn.amount - fv.user_avg_amount) / max(std_amount, 1.0)
+
+        user_city = (offline.get("user_city") or "").lower()
+        merchant_city = (merchant.city or "").lower() if merchant else ""
+        fv.geo_mismatch = 1 if (user_city and merchant_city and user_city != merchant_city) else 0
+
+        # ── Day 5 features ───────────────────────────────────────
+        fv.log_amount = math.log1p(txn.amount)
+        fv.is_round_amount = 1 if (txn.amount == int(txn.amount) and txn.amount % 100 == 0) else 0
+        fv.is_weekend = 1 if txn.created_at.weekday() >= 5 else 0
+
+        if merchant and merchant.registered_at:
+            fv.merchant_tenure_days = max((txn.created_at - merchant.registered_at).days, 0)
+
+        if user and user.updated_at:
+            hours_since = (txn.created_at - user.updated_at).total_seconds() / 3600.0
+            fv.hours_since_profile_update = max(hours_since, 0.0)
+
+        # ── Day 6: time_since_last_txn ────────────────────────────
+        last_txn_time_str = offline.get("last_txn_time")
+        if last_txn_time_str:
+            try:
+                last_ts = datetime.fromisoformat(last_txn_time_str)
+                fv.time_since_last_txn_secs = max(
+                    (txn.created_at - last_ts).total_seconds(), 0.0
+                )
+            except (ValueError, TypeError):
+                fv.time_since_last_txn_secs = 86400.0
 
         # Update velocity counter (fire-and-forget, async in production)
         self._increment_velocity(txn.user_id)

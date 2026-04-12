@@ -85,6 +85,8 @@ class LocalFileRegistry(ModelRegistry):
             "threshold":     metadata.threshold,
             "feature_names": metadata.feature_names,
             "is_champion":   metadata.is_champion,
+            "ks_statistic":  metadata.ks_statistic,
+            "calibration":   metadata.calibration,
         }
         with open(os.path.join(version_dir, "metadata.json"), "w") as f:
             json.dump(meta_dict, f, indent=2)
@@ -123,6 +125,8 @@ class LocalFileRegistry(ModelRegistry):
             threshold     = meta_dict["threshold"],
             feature_names = meta_dict["feature_names"],
             is_champion   = meta_dict.get("is_champion", False),
+            ks_statistic  = meta_dict.get("ks_statistic", 0.0),
+            calibration   = meta_dict.get("calibration", "none"),
         )
         return model, metadata
 
@@ -175,8 +179,14 @@ class LocalFileRegistry(ModelRegistry):
                         threshold     = meta["threshold"],
                         feature_names = meta["feature_names"],
                         is_champion   = meta.get("is_champion", False),
+                        ks_statistic  = meta.get("ks_statistic", 0.0),
+                        calibration   = meta.get("calibration", "none"),
                     ))
         return sorted(versions, key=lambda v: v.trained_at)
+
+    def get_champion_version(self) -> Optional[str]:
+        """Version id for the champion model (CURRENT file, else latest by trained_at)."""
+        return self._get_current_version()
 
     def _get_current_version(self) -> Optional[str]:
         current_file = os.path.join(self.base_path, "CURRENT")

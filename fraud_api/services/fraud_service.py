@@ -24,7 +24,8 @@ from fraudshield_core.models import (
 )
 from fraud_api.repository.base import (
     UserRepository, TransactionRepository,
-    FraudScoreRepository, FraudLabelRepository
+    FraudScoreRepository, FraudLabelRepository,
+    MerchantRepository,
 )
 from fraud_api.scoring.scorer import FraudScorer
 from fraud_api.scoring.feature_builder import FeatureBuilder
@@ -54,13 +55,15 @@ class FraudService:
                  score_repo:   FraudScoreRepository,
                  scorer:       FraudScorer,
                  feature_builder: FeatureBuilder,
-                 publisher:    EventPublisher):
+                 publisher:    EventPublisher,
+                 merchant_repo: MerchantRepository = None):
         self.user_repo        = user_repo
         self.txn_repo         = txn_repo
         self.score_repo       = score_repo
         self.scorer           = scorer
         self.feature_builder  = feature_builder
         self.publisher        = publisher
+        self.merchant_repo    = merchant_repo
 
     def process(self, txn: Transaction,
                 merchant: Optional[Merchant] = None,
@@ -83,6 +86,10 @@ class FraudService:
         # Slide 73 Seq 2: blocked user path
         if user.is_blocked():
             return self._blocked_result(txn, start_ms)
+
+        # ── Step 3b: Look up merchant ─────────────────────────────
+        if merchant is None and self.merchant_repo:
+            merchant = self.merchant_repo.get_by_id(txn.merchant_id)
 
         # ── Step 4: Build feature vector ────────────────────────
         features = self.feature_builder.build(txn, user, merchant, device)

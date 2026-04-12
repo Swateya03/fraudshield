@@ -14,6 +14,16 @@ from typing import Optional
 from fraud_api.scoring.strategies.base import ScoringStrategy
 from fraudshield_core.models import FeatureVector
 from fraudshield_core.config import config
+from ml_pipeline.training.registry import LocalFileRegistry
+
+
+def _champion_model_dir() -> Optional[str]:
+    """Resolve directory for champion artifact (CURRENT file or latest version)."""
+    reg = LocalFileRegistry()
+    ver = reg.get_champion_version()
+    if not ver:
+        return None
+    return os.path.join(reg.base_path, ver)
 
 
 class XGBoostStrategy(ScoringStrategy):
@@ -26,10 +36,14 @@ class XGBoostStrategy(ScoringStrategy):
     name = "xgboost_v1"
 
     def __init__(self, model_path: str = None):
-        self._model_path = model_path or os.path.join(
-            config.MODEL_REGISTRY_PATH,
-            config.CURRENT_MODEL_VERSION
-        )
+        if model_path:
+            self._model_path = model_path
+        else:
+            resolved = _champion_model_dir()
+            self._model_path = resolved or os.path.join(
+                config.MODEL_REGISTRY_PATH,
+                config.CURRENT_MODEL_VERSION,
+            )
         self._model        = None
         self._explainer    = None
         self._model_loaded = False
@@ -48,12 +62,19 @@ class XGBoostStrategy(ScoringStrategy):
         try:
             with open(model_file, "rb") as f:
                 self._model = pickle.load(f)
-            # Load SHAP explainer for reason codes
+            # If model is CalibratedClassifierCV, extract base estimator for SHAP
+            base_estimator = self._model
+            try:
+                from sklearn.calibration import CalibratedClassifierCV
+                if isinstance(self._model, CalibratedClassifierCV):
+                    base_estimator = self._model.calibrated_classifiers_[0].estimator
+            except Exception:
+                pass
             try:
                 import shap
-                self._explainer = shap.TreeExplainer(self._model)
+                self._explainer = shap.TreeExplainer(base_estimator)
             except Exception:
-                pass  # SHAP optional — reason codes will be empty
+                pass
             self._model_loaded = True
             print(f"  [XGBoostStrategy] Loaded model from {self._model_path}")
         except Exception as e:

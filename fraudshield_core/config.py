@@ -68,8 +68,11 @@ class Config:
     # ── MLflow ────────────────────────────────
     MLFLOW_TRACKING_URI: str   = _resolve_data_path(os.getenv("MLFLOW_TRACKING_URI", "local_store/mlruns"))
 
+    # ── Training ───────────────────────────────
+    USE_PU_LEARNING: bool  = os.getenv("USE_PU_LEARNING", "false").lower() == "true"
+
     # ── Drift Detection ───────────────────────
-    PSI_THRESHOLD: float       = float(os.getenv("PSI_THRESHOLD", "0.25"))
+    PSI_THRESHOLD: float       = float(os.getenv("PSI_THRESHOLD", "0.20"))
     DRIFT_CHECK_WINDOW_DAYS: int = int(os.getenv("DRIFT_CHECK_WINDOW_DAYS", "7"))
 
     # ── Event Publisher ───────────────────────

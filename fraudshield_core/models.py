@@ -179,6 +179,18 @@ class FeatureVector:
     is_new_device:      int   = 0     # 1 if device never seen before
     is_late_night:      int   = 0     # 1 if hour in [0,1,2,3,4]
     is_new_user:        int   = 0     # 1 if account < 30 days old
+    amount_zscore:      float = 0.0
+    geo_mismatch:       int   = 0
+
+    # ── Day 5 features ──
+    log_amount:                float = 0.0
+    is_round_amount:           int   = 0
+    is_weekend:                int   = 0
+    merchant_tenure_days:      int   = 0
+    hours_since_profile_update: float = 0.0
+
+    # ── Day 6 features ──
+    time_since_last_txn_secs:  float = 86400.0
 
     def to_model_input(self) -> list:
         """Returns ordered list for XGBoost input. Order MUST match training."""
@@ -195,6 +207,14 @@ class FeatureVector:
             self.is_new_device,
             self.is_late_night,
             self.is_new_user,
+            self.amount_zscore,
+            self.geo_mismatch,
+            self.log_amount,
+            self.is_round_amount,
+            self.is_weekend,
+            self.merchant_tenure_days,
+            self.hours_since_profile_update,
+            self.time_since_last_txn_secs,
         ]
 
     FEATURE_NAMES = [
@@ -202,6 +222,10 @@ class FeatureVector:
         "amount_ratio", "device_trust_score", "ip_fraud_history",
         "merchant_risk_score", "hour_of_day", "day_of_week",
         "is_new_device", "is_late_night", "is_new_user",
+        "amount_zscore", "geo_mismatch",
+        "log_amount", "is_round_amount", "is_weekend",
+        "merchant_tenure_days", "hours_since_profile_update",
+        "time_since_last_txn_secs",
     ]
 
 
@@ -291,4 +315,6 @@ class ModelMetadata:
     f1_score:       float
     threshold:      float
     feature_names:  List[str]
-    is_champion:    bool = False    # is this the currently deployed model?
+    is_champion:    bool = False
+    ks_statistic:   float = 0.0
+    calibration:    str   = "none"

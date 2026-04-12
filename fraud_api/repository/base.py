@@ -12,7 +12,7 @@ implements this interface. FraudAPI never changes.
 
 from abc import ABC, abstractmethod
 from typing import Optional, List
-from fraudshield_core.models import User, Transaction, FraudScore, FraudLabel, UserRiskHistory
+from fraudshield_core.models import User, Transaction, FraudScore, FraudLabel, UserRiskHistory, Merchant
 from datetime import datetime
 
 
@@ -115,4 +115,11 @@ class FraudLabelRepository(ABC):
         Returns labeled transactions for model training.
         Joins: transactions + fraud_scores + fraud_labels
         """
+        ...
+
+
+class MerchantRepository(ABC):
+
+    @abstractmethod
+    def get_by_id(self, merchant_id: str) -> Optional[Merchant]:
         ...

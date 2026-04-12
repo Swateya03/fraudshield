@@ -1,9 +1,14 @@
 # .gitignore
+**/node_modules/
+# Leftover duplicate tree — delete locally when DB is not locked
+/fraudshield/
+
 .venv/
 venv/
 __pycache__/
 *.pyc
 *.pyo
+local_store/
 local_store/fraud.db*
 local_store/test_api.db
 local_store/mlruns/

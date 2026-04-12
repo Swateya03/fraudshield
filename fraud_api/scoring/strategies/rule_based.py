@@ -46,6 +46,25 @@ class RuleBasedStrategy(ScoringStrategy):
             score += 0.20
             codes.append({"code": "high_risk_merchant", "contribution": 0.20})
 
+        if features.geo_mismatch:
+            score += 0.15
+            codes.append({"code": "geo_mismatch", "contribution": 0.15})
+
+        if features.amount_zscore > 3.0:
+            score += 0.20
+            codes.append({"code": "amount_zscore_high", "contribution": 0.20})
+        if features.amount_zscore > 6.0:
+            score += 0.10
+            codes.append({"code": "amount_zscore_extreme", "contribution": 0.10})
+
+        if features.hours_since_profile_update < 48:
+            score += 0.15
+            codes.append({"code": "recent_profile_change", "contribution": 0.15})
+
+        if features.merchant_tenure_days < 30:
+            score += 0.10
+            codes.append({"code": "new_merchant", "contribution": 0.10})
+
         return {
             "score":        round(min(score, 1.0), 4),
             "reason_codes": codes,

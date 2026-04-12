@@ -7,22 +7,39 @@ Designed to scale from SQLite on your laptop to PostgreSQL + Kafka in production
 
 ---
 
-## Quick Start (5 commands)
+## Development setup (required once per clone)
+
+Python imports (`fraudshield_core`, `fraud_api`, `ml_pipeline`) come from this repo. Install it in **editable** mode so scripts, tests, and tools resolve packages the same way everywhere:
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+cd /path/to/fraudshield_mvp
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
 
-# 2. Start Redis (only external dependency)
+pip install -r requirements.txt
+pip install -e .
+```
+
+Without `pip install -e .`, you will see `ModuleNotFoundError` for project packages. CI already runs `pip install -e .` before tests.
+
+---
+
+## Quick Start (after [Development setup](#development-setup-required-once-per-clone))
+
+```bash
+# 1. Start Redis (only external dependency)
 docker-compose up -d redis
 
-# 3. Seed the database with 90 days of synthetic data
+# 2. Seed the database with 90 days of synthetic data
 python scripts/seed_data.py
+#    Fresh start (removes local_store/fraud.db — stop the API first):
+#    python scripts/seed_data.py --reset
 
-# 4. Train the XGBoost model
+# 3. Train the XGBoost model
 python scripts/train_model.py
 
-# 5. Start the API
+# 4. Start the API
 python fraud_api/main.py
 ```
 

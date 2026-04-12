@@ -11,15 +11,17 @@ import os
 import pickle
 import json
 from datetime import datetime
-from typing import Tuple
+from typing import Tuple, Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import (
     roc_auc_score, precision_score, recall_score,
     f1_score, precision_recall_curve
 )
+from scipy.stats import ks_2samp
 import xgboost as xgb
 import mlflow
 import mlflow.xgboost
@@ -29,21 +31,36 @@ from fraudshield_core.models import FeatureVector, ModelMetadata
 
 
 def train(X: pd.DataFrame, y: pd.Series,
-          version: str = None) -> Tuple[object, ModelMetadata]:
+          version: str = None,
+          groups: np.ndarray = None) -> Tuple[object, ModelMetadata]:
     """
     Train XGBoost classifier. Track with MLflow. Save to registry.
+    Uses GroupShuffleSplit when groups are provided to prevent entity leakage.
+    Applies Platt scaling calibration and computes KS statistic.
 
-    Returns (model, metadata).
+    Returns (calibrated_model, metadata).
     """
     version = version or f"v{datetime.utcnow().strftime('%Y%m%d_%H%M')}"
 
     # ── Split ─────────────────────────────────────────────────
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        X, y, test_size=0.30, random_state=42, stratify=y
-    )
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.50, random_state=42, stratify=y_temp
-    )
+    if groups is not None:
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.30, random_state=42)
+        train_idx, temp_idx = next(gss.split(X, y, groups))
+        X_train, X_temp = X.iloc[train_idx], X.iloc[temp_idx]
+        y_train, y_temp = y.iloc[train_idx], y.iloc[temp_idx]
+        groups_temp = groups[temp_idx]
+
+        gss2 = GroupShuffleSplit(n_splits=1, test_size=0.50, random_state=42)
+        val_idx, test_idx = next(gss2.split(X_temp, y_temp, groups_temp))
+        X_val, X_test = X_temp.iloc[val_idx], X_temp.iloc[test_idx]
+        y_val, y_test = y_temp.iloc[val_idx], y_temp.iloc[test_idx]
+    else:
+        X_train, X_temp, y_train, y_temp = train_test_split(
+            X, y, test_size=0.30, random_state=42, stratify=y
+        )
+        X_val, X_test, y_val, y_test = train_test_split(
+            X_temp, y_temp, test_size=0.50, random_state=42, stratify=y_temp
+        )
 
     print(f"  Train: {len(X_train):,}  Val: {len(X_val):,}  Test: {len(X_test):,}")
 
@@ -51,14 +68,13 @@ def train(X: pd.DataFrame, y: pd.Series,
     from pathlib import Path as _Path
     _uri = config.MLFLOW_TRACKING_URI
     if not _uri.startswith(("http", "file:", "databricks", "sqlite", "postgresql")):
-        _uri = _Path(_uri).resolve().as_uri()   # converts C:\... → file:///C:/...
+        _uri = _Path(_uri).resolve().as_uri()
     mlflow.set_tracking_uri(_uri)
     mlflow.set_experiment("fraudshield-cnp-detection")
 
     with mlflow.start_run(run_name=version):
 
         # ── Train ─────────────────────────────────────────────
-        # Class imbalance: fraud is ~8% — use scale_pos_weight
         neg_count  = (y_train == 0).sum()
         pos_count  = (y_train == 1).sum()
         scale_pos  = neg_count / max(pos_count, 1)
@@ -81,9 +97,18 @@ def train(X: pd.DataFrame, y: pd.Series,
             verbose=False,
         )
 
+        # ── Platt scaling calibration ─────────────────────────
+        calibrated = CalibratedClassifierCV(model, cv="prefit", method="sigmoid")
+        calibrated.fit(X_val, y_val)
+
         # ── Evaluate ──────────────────────────────────────────
-        y_prob = model.predict_proba(X_test)[:, 1]
+        y_prob = calibrated.predict_proba(X_test)[:, 1]
         auc    = roc_auc_score(y_test, y_prob)
+
+        # KS Statistic
+        fraud_scores = y_prob[y_test == 1]
+        legit_scores = y_prob[y_test == 0]
+        ks_stat = float(ks_2samp(fraud_scores, legit_scores).statistic) if len(fraud_scores) > 0 and len(legit_scores) > 0 else 0.0
 
         # Find threshold that maximises F1
         precisions, recalls, thresholds = precision_recall_curve(y_test, y_prob)
@@ -91,26 +116,24 @@ def train(X: pd.DataFrame, y: pd.Series,
         best_idx   = f1_scores.argmax()
         threshold  = float(thresholds[best_idx])
 
-        # Guard: perfectly separable synthetic data returns threshold ~1.0
-        # which causes the API to never block anything.
-        # Fall back to 15th percentile of fraud scores on the test set.
         if threshold >= 0.90:
             threshold = float(np.percentile(y_prob[y_test == 1], 15))
             threshold = round(max(0.30, min(threshold, 0.89)), 4)
-            print(f"  [threshold] PR fallback applied → {threshold:.4f}")
+            print(f"  [threshold] PR fallback applied -> {threshold:.4f}")
 
         y_pred = (y_prob >= threshold).astype(int)
         precision  = precision_score(y_test, y_pred, zero_division=0)
-        recall     = recall_score(y_test, y_pred, zero_division=0)
+        recall_val = recall_score(y_test, y_pred, zero_division=0)
         f1         = f1_score(y_test, y_pred, zero_division=0)
 
         print(f"\n  Results:")
-        print(f"    AUC-ROC:   {auc:.4f}")
-        print(f"    Precision: {precision:.4f}  (at threshold {threshold:.2f})")
-        print(f"    Recall:    {recall:.4f}")
-        print(f"    F1:        {f1:.4f}")
+        print(f"    AUC-ROC:      {auc:.4f}")
+        print(f"    KS Statistic: {ks_stat:.4f}")
+        print(f"    Calibration:  platt")
+        print(f"    Precision:    {precision:.4f}  (at threshold {threshold:.2f})")
+        print(f"    Recall:       {recall_val:.4f}")
+        print(f"    F1:           {f1:.4f}")
 
-        # Log to MLflow
         mlflow.log_params({
             "version": version,
             "n_estimators": 300,
@@ -118,16 +141,18 @@ def train(X: pd.DataFrame, y: pd.Series,
             "threshold": threshold,
             "train_size": len(X_train),
             "fraud_rate": float(y.mean()),
+            "calibration": "platt",
+            "split_method": "GroupShuffleSplit" if groups is not None else "stratified",
         })
         mlflow.log_metrics({
-            "auc_roc":   auc,
-            "precision": precision,
-            "recall":    recall,
-            "f1":        f1,
+            "auc_roc":      auc,
+            "ks_statistic": ks_stat,
+            "precision":    precision,
+            "recall":       recall_val,
+            "f1":           f1,
         })
         mlflow.xgboost.log_model(model, "model")
 
-        # ── Build metadata ────────────────────────────────────
         metadata = ModelMetadata(
             version       = version,
             trained_at    = datetime.utcnow(),
@@ -135,11 +160,13 @@ def train(X: pd.DataFrame, y: pd.Series,
             fraud_rate    = float(y.mean()),
             auc_roc       = round(auc, 4),
             precision     = round(precision, 4),
-            recall        = round(recall, 4),
+            recall        = round(recall_val, 4),
             f1_score      = round(f1, 4),
             threshold     = round(threshold, 4),
             feature_names = FeatureVector.FEATURE_NAMES,
             is_champion   = False,
+            ks_statistic  = round(ks_stat, 4),
+            calibration   = "platt",
         )
 
-    return model, metadata
+    return calibrated, metadata

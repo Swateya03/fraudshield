@@ -1,3 +1,5 @@
+# After installing deps: pip install -e .  (see README — required for imports)
+
 # ─── Core API ────────────────────────────────
 fastapi==0.110.0
 uvicorn[standard]==0.29.0

@@ -65,11 +65,14 @@ def run_drift_report(baseline_days: int = 60,
             t.device_id,
             t.created_at,
             t.merchant_id,
+            t.user_id,
+            m.city AS merchant_city,
             (SELECT COUNT(*) FROM transactions t2
              WHERE t2.user_id = t.user_id
                AND t2.created_at BETWEEN datetime(t.created_at, '-1 hour')
                                      AND t.created_at) AS velocity_1h
         FROM transactions t
+        LEFT JOIN merchants m ON m.id = t.merchant_id
         WHERE t.created_at >= :cutoff
     """)
 
@@ -88,8 +91,9 @@ def run_drift_report(baseline_days: int = 60,
 
     # ── Compute PSI for key features ─────────────────────────
     results = {}
-    FRAUD_IPS = {"185.220.101.5", "185.220.101.6", "192.42.116.16"}
-    HIGH_RISK_MERCHANTS = {"m_crypto", "m_giftcard", "m_jewelry"}
+    FRAUD_IPS = {"185.220.101.5", "185.220.101.6", "192.42.116.16",
+                  "199.87.154.255", "23.129.64.131"}
+    HIGH_RISK_MERCHANTS = {"m_crypto", "m_giftcard", "m_jewelry", "m_luxury"}
 
     feature_extractors = {
         "amount_log":           lambda df: np.log1p(df["amount"]),
@@ -101,6 +105,21 @@ def run_drift_report(baseline_days: int = 60,
         "merchant_risk_score":  lambda df: df["merchant_id"].isin(HIGH_RISK_MERCHANTS).astype(float),
         "hour_of_day":          lambda df: df["created_at"].apply(
                                     lambda x: float(x[11:13]) if isinstance(x, str) else 0.0
+                                ),
+        "amount_zscore_proxy":  lambda df: (
+                                    (df["amount"] - df.groupby("user_id")["amount"].transform("mean"))
+                                    / df.groupby("user_id")["amount"].transform("std").clip(lower=1)
+                                ),
+        "geo_mismatch":         lambda df: (
+                                    df["merchant_city"].fillna("").str.lower()
+                                    != df.get("user_city", pd.Series("", index=df.index)).fillna("").str.lower()
+                                ).astype(float),
+        "log_amount":           lambda df: np.log1p(df["amount"]),
+        "is_round_amount":      lambda df: df["amount"].apply(
+                                    lambda x: 1.0 if x == int(x) and x % 100 == 0 else 0.0
+                                ),
+        "is_weekend":           lambda df: df["created_at"].apply(
+                                    lambda x: 1.0 if isinstance(x, str) and pd.Timestamp(x).dayofweek >= 5 else 0.0
                                 ),
     }
 

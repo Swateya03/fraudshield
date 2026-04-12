@@ -41,5 +41,6 @@ ml_pipeline/training/__init__.py
 ml_pipeline/training/dataset.py
 ml_pipeline/training/registry.py
 ml_pipeline/training/train.py
+tests/test_api.py
 tests/test_repository.py
 tests/test_scoring.py

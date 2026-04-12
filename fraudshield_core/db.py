@@ -55,6 +55,8 @@ users_table = Table("users", metadata,
     Column("phone",       String),
     Column("risk_tier",   String,   nullable=False, default="unknown"),
     Column("kyc_status",  String,   nullable=False, default="pending"),
+    Column("city",        String),
+    Column("state",       String),
     Column("created_at",  DateTime, nullable=False),
     Column("updated_at",  DateTime, nullable=False),
 )
@@ -91,6 +93,7 @@ transactions_table = Table("transactions", metadata,
     Column("channel",     String,  nullable=False),
     Column("ip_address",  String),
     Column("created_at",  DateTime,nullable=False),
+    Column("txn_source",  String,  default="prod"),
 )
 
 fraud_scores_table = Table("fraud_scores", metadata,

@@ -39,13 +39,17 @@ def compute_and_store_features(days_lookback: int = 30) -> dict:
             AVG(t.amount)                     AS avg_amount,
             MAX(t.amount)                     AS max_amount,
             MIN(t.amount)                     AS min_amount,
+            SQRT(MAX(0, AVG(t.amount * t.amount) - AVG(t.amount) * AVG(t.amount))) AS std_amount,
             COUNT(*) * 1.0 / :days            AS avg_velocity_per_day,
             COUNT(DISTINCT t.merchant_id)     AS distinct_merchants,
             COUNT(DISTINCT t.ip_address)      AS distinct_ips,
             COUNT(DISTINCT t.device_id)       AS distinct_devices,
             SUM(CASE WHEN strftime('%H', t.created_at) < '05'
-                     THEN 1 ELSE 0 END)       AS late_night_txns
+                     THEN 1 ELSE 0 END)       AS late_night_txns,
+            MAX(u.city)                       AS user_city,
+            MAX(t.created_at)                 AS last_txn_time
         FROM transactions t
+        LEFT JOIN users u ON u.id = t.user_id
         WHERE t.created_at >= :cutoff
         GROUP BY t.user_id
     """)
@@ -62,6 +66,7 @@ def compute_and_store_features(days_lookback: int = 30) -> dict:
                 "avg_amount":          float(row.avg_amount or 500),
                 "max_amount":          float(row.max_amount or 0),
                 "min_amount":          float(row.min_amount or 0),
+                "std_amount":          float(row.std_amount or 1),
                 "avg_velocity_per_day": float(row.avg_velocity_per_day or 1),
                 "distinct_merchants":  int(row.distinct_merchants or 0),
                 "distinct_ips":        int(row.distinct_ips or 0),
@@ -69,6 +74,8 @@ def compute_and_store_features(days_lookback: int = 30) -> dict:
                 "late_night_ratio":    (
                     row.late_night_txns / max(row.txn_count, 1)
                 ),
+                "user_city":           row.user_city or "",
+                "last_txn_time":       row.last_txn_time or "",
                 "computed_at":         datetime.utcnow().isoformat(),
             }
             store.set_offline_features(row.user_id, features)

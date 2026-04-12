@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+
+  :root {
+    --scrollbar-track: #111720;
+    --scrollbar-thumb: #1e2a38;
+  }
+
+  ::-webkit-scrollbar       { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+  ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+  ::selection { background: #0d9e7533; color: #5de4b4; }
+}
+
+@layer components {
+  /* Decision badges */
+  .badge-allow  { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono font-medium bg-allow-dim text-allow-text border border-allow/30; }
+  .badge-block  { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono font-medium bg-block-dim text-block-text border border-block/30; }
+  .badge-review { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono font-medium bg-review-dim text-review-text border border-review/30; }
+
+  /* Panel base */
+  .panel { @apply bg-panel border border-border rounded-xl p-4; }
+
+  /* Stat number */
+  .stat-num { @apply font-mono text-3xl font-medium tracking-tight; }
+  .stat-lbl  { @apply text-xs text-slate-500 uppercase tracking-widest mt-1; }
+
+  /* Table rows */
+  .trow { @apply border-b border-border/50 hover:bg-surface/60 transition-colors duration-100; }
+  .tcell { @apply px-4 py-2.5 text-sm; }
+}

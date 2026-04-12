@@ -20,16 +20,18 @@ import uuid
 
 from fraudshield_core.models import (
     User, Transaction, FraudScore, FraudLabel, UserRiskHistory,
+    Merchant, MerchantRisk,
     RiskTier, KYCStatus, Channel, Decision, LabelSource
 )
 from fraudshield_core.db import (
     get_engine,
-    users_table, transactions_table, fraud_scores_table,
+    users_table, merchants_table, transactions_table, fraud_scores_table,
     fraud_labels_table, user_risk_history_table, devices_table
 )
 from fraud_api.repository.base import (
     UserRepository, TransactionRepository,
-    FraudScoreRepository, FraudLabelRepository
+    FraudScoreRepository, FraudLabelRepository,
+    MerchantRepository,
 )
 
 
@@ -314,7 +316,7 @@ class SQLiteFraudLabelRepository(FraudLabelRepository):
             rows = conn.execute(query, {"limit": limit}).fetchall()
         return [dict(r._mapping) for r in rows]
 
-    def get_labeled_training_data(self,
+    def get_labeled_training_data(self,  # noqa: C901
                                    from_date: datetime,
                                    to_date: datetime) -> List[dict]:
         """
@@ -346,3 +348,27 @@ class SQLiteFraudLabelRepository(FraudLabelRepository):
                 "to_date":   to_date
             }).fetchall()
         return [dict(r._mapping) for r in rows]
+
+
+class SQLiteMerchantRepository(MerchantRepository):
+
+    def __init__(self, engine: Engine = None):
+        self.engine = engine or get_engine()
+
+    def get_by_id(self, merchant_id: str) -> Optional[Merchant]:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(merchants_table).where(merchants_table.c.id == merchant_id)
+            ).fetchone()
+        if not row:
+            return None
+        return Merchant(
+            id            = row.id,
+            name          = row.name,
+            category      = row.category,
+            mcc           = row.mcc,
+            city          = row.city,
+            state         = row.state,
+            risk_level    = MerchantRisk(row.risk_level),
+            registered_at = row.registered_at,
+        )

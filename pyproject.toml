@@ -17,3 +17,9 @@ include = ["fraudshield_core*", "fraud_api*", "ml_pipeline*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Pylance / Pyright: resolve top-level packages from repo root (same layout as editable install)
+[tool.pyright]
+pythonVersion = "3.11"
+extraPaths = ["."]
+typeCheckingMode = "basic"

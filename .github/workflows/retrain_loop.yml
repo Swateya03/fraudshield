@@ -43,7 +43,13 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
-      # ── 2. Seed database ────────────────────────────────────────────────────
+      # ── 2. Create runtime directories ──────────────────────────────────────────
+      # local_store/ is gitignored so it doesn't exist in a fresh CI checkout.
+      # SQLite cannot create a DB file when the parent directory is absent.
+      - name: Create runtime directories
+        run: mkdir -p local_store/model_registry local_store/mlruns
+
+      # ── 3. Seed database ────────────────────────────────────────────────────
       # Simulates 90 days of production traffic so drift detection has a
       # baseline window (last 60 days) and a current window (last 7 days).
       - name: Seed database (90 days of synthetic transactions)
@@ -51,7 +57,7 @@ jobs:
         env:
           DB_URL: ${{ env.DB_URL }}
 
-      # ── 3. Train initial champion ───────────────────────────────────────────
+      # ── 4. Train initial champion ───────────────────────────────────────────
       # In real production this model already exists in the registry.
       # In CI we train it fresh so we have something to compare against.
       - name: Train and register baseline champion
@@ -61,7 +67,7 @@ jobs:
           MODEL_REGISTRY_PATH: ${{ env.MODEL_REGISTRY_PATH }}
           MLFLOW_TRACKING_URI: ${{ env.MLFLOW_TRACKING_URI }}
 
-      # ── 4. Inject concept drift ─────────────────────────────────────────────
+      # ── 5. Inject concept drift ─────────────────────────────────────────────
       # Simulates Month 2 attacker pattern shift:
       #   known device + clean VPN IP + daytime + split amounts
       # PSI will spike on device_trust_score, ip_fraud_history, is_late_night.
@@ -70,7 +76,7 @@ jobs:
         env:
           DB_URL: ${{ env.DB_URL }}
 
-      # ── 5. Drift check → retrain → promote ─────────────────────────────────
+      # ── 6. Drift check → retrain → promote ─────────────────────────────────
       - name: Run retrain loop
         id: retrain
         run: |
@@ -82,7 +88,7 @@ jobs:
           MODEL_REGISTRY_PATH: ${{ env.MODEL_REGISTRY_PATH }}
           MLFLOW_TRACKING_URI: ${{ env.MLFLOW_TRACKING_URI }}
 
-      # ── 6. Parse results & write job summary ────────────────────────────────
+      # ── 7. Parse results & write job summary ────────────────────────────────
       - name: Write job summary
         if: always()
         run: |
@@ -142,7 +148,7 @@ jobs:
           print("Job summary written.")
           EOF
 
-      # ── 7. Upload model artifacts ───────────────────────────────────────────
+      # ── 8. Upload model artifacts ───────────────────────────────────────────
       - name: Upload model registry artifact
         if: always()
         uses: actions/upload-artifact@v4

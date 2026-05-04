@@ -33,6 +33,9 @@ def client():
     for k, v in _overrides.items():
         setattr(config, k, v)
 
+    # Ensure parent directory exists — local_store/ is gitignored
+    _TEST_DB.parent.mkdir(parents=True, exist_ok=True)
+
     # Recreate engine with test DB URL
     from fraudshield_core import db as db_module
     from sqlalchemy import create_engine

@@ -22,6 +22,9 @@ def make_feature_vector(
     ip_fraud_history: float = 0.0,
     is_late_night:    int   = 0,
     merchant_risk_score: float = 0.1,
+    # New rule fields — defaults chosen so a "clean" vector scores 0
+    hours_since_profile_update: float = 720.0,   # 30 days — not recent
+    merchant_tenure_days:       int   = 365,      # established merchant
 ) -> FeatureVector:
     return FeatureVector(
         transaction_id   = "txn_test",
@@ -31,7 +34,9 @@ def make_feature_vector(
         is_new_device    = is_new_device,
         ip_fraud_history = ip_fraud_history,
         is_late_night    = is_late_night,
-        merchant_risk_score = merchant_risk_score,
+        merchant_risk_score         = merchant_risk_score,
+        hours_since_profile_update  = hours_since_profile_update,
+        merchant_tenure_days        = merchant_tenure_days,
     )
 
 

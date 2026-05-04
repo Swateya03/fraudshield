@@ -93,13 +93,19 @@ jobs:
       - name: Run simulator quality gate
         run: |
           python -c "
+          from collections import defaultdict
           from ml_pipeline.data.simulator import (
               generate_users, generate_devices,
-              generate_transactions, validate
+              generate_transactions, generate_labels, validate
           )
-          users  = generate_users(50, seed=42)
-          devs   = generate_devices(users, seed=43)
-          txns, labels = generate_transactions(users, devs, n_days=30, seed=44)
+          users = generate_users(50, seed=42)
+          devs  = generate_devices(users, seed=43)
+          txns  = generate_transactions(users, devs, n_days=30, seed=44)
+          amounts = defaultdict(list)
+          for t in txns:
+              amounts[t['user_id']].append(t['amount'])
+          user_avg = {uid: sum(a)/len(a) for uid, a in amounts.items()}
+          labels = generate_labels(txns, user_avg, seed=45)
           result = validate(txns, labels)
           print(f'Amount ratio:    {result[\"amount_ratio\"]}x')
           print(f'IP signal:       {result[\"fraud_ip_rate_pct\"]}%')

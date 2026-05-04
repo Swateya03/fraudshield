@@ -24,6 +24,15 @@ import os
 # PostgreSQL doesn't need this — it's ignored automatically
 connect_args = {"check_same_thread": False} if "sqlite" in config.DB_URL else {}
 
+# For SQLite: create the parent directory before the engine is instantiated.
+# SQLite cannot create a DB file when the parent directory doesn't exist, and
+# local_store/ is gitignored so it's absent in fresh CI checkouts.
+if "sqlite" in config.DB_URL:
+    _db_path = config.DB_URL.split("sqlite:///", 1)[-1]
+    _db_dir = os.path.dirname(_db_path)
+    if _db_dir:
+        os.makedirs(_db_dir, exist_ok=True)
+
 engine: Engine = create_engine(
     config.DB_URL,
     connect_args=connect_args,
@@ -149,9 +158,6 @@ Index("idx_risk_hist_user",  user_risk_history_table.c.user_id,
 
 def create_all_tables() -> None:
     """Create all tables. Safe to call multiple times (CREATE IF NOT EXISTS)."""
-    db_dir = os.path.dirname(config.DB_URL.replace("sqlite:///", ""))
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
     metadata.create_all(engine)
     print("✓ All tables created")
 

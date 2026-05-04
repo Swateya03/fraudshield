@@ -1,0 +1,154 @@
+name: Retrain Loop
+
+# ── Triggers ──────────────────────────────────────────────────────────────────
+# Scheduled: daily at 02:00 UTC (off-peak; runs against production DB in real deploy)
+# Manual:    workflow_dispatch lets you force a retrain or test the pipeline on-demand
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      force_retrain:
+        description: "Force retrain even if no drift is detected"
+        type: boolean
+        default: false
+
+env:
+  MODEL_REGISTRY_PATH: local_store/model_registry
+  MLFLOW_TRACKING_URI: local_store/mlruns
+  DB_URL: "sqlite:///local_store/fraud.db"
+  REDIS_URL: "redis://localhost:6379"
+  API_TOKEN: "ci_token"
+  FRAUD_THRESHOLD: "0.50"
+  REVIEW_THRESHOLD: "0.20"
+
+jobs:
+  retrain-loop:
+    name: "Drift → Retrain → Promote"
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout & Python ────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e .
+
+      # ── 2. Seed database ────────────────────────────────────────────────────
+      # Simulates 90 days of production traffic so drift detection has a
+      # baseline window (last 60 days) and a current window (last 7 days).
+      - name: Seed database (90 days of synthetic transactions)
+        run: python scripts/seed_data.py
+        env:
+          DB_URL: ${{ env.DB_URL }}
+
+      # ── 3. Train initial champion ───────────────────────────────────────────
+      # In real production this model already exists in the registry.
+      # In CI we train it fresh so we have something to compare against.
+      - name: Train and register baseline champion
+        run: python scripts/train_model.py
+        env:
+          DB_URL: ${{ env.DB_URL }}
+          MODEL_REGISTRY_PATH: ${{ env.MODEL_REGISTRY_PATH }}
+          MLFLOW_TRACKING_URI: ${{ env.MLFLOW_TRACKING_URI }}
+
+      # ── 4. Inject concept drift ─────────────────────────────────────────────
+      # Simulates Month 2 attacker pattern shift:
+      #   known device + clean VPN IP + daytime + split amounts
+      # PSI will spike on device_trust_score, ip_fraud_history, is_late_night.
+      - name: Inject concept drift (Month 2 fraud pattern)
+        run: python scripts/inject_drift.py
+        env:
+          DB_URL: ${{ env.DB_URL }}
+
+      # ── 5. Drift check → retrain → promote ─────────────────────────────────
+      - name: Run retrain loop
+        id: retrain
+        run: |
+          python scripts/retrain_loop.py \
+            --force "${{ github.event.inputs.force_retrain || 'false' }}" \
+            --output retrain_result.json
+        env:
+          DB_URL: ${{ env.DB_URL }}
+          MODEL_REGISTRY_PATH: ${{ env.MODEL_REGISTRY_PATH }}
+          MLFLOW_TRACKING_URI: ${{ env.MLFLOW_TRACKING_URI }}
+
+      # ── 6. Parse results & write job summary ────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          python - <<'EOF'
+          import json, os, sys
+
+          result_path = "retrain_result.json"
+          if not os.path.exists(result_path):
+              summary = "## FraudShield Retrain Loop\n\n❌ `retrain_result.json` not found — pipeline may have crashed before writing results.\n"
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                  f.write(summary)
+              sys.exit(0)
+
+          with open(result_path) as f:
+              r = json.load(f)
+
+          rec = r.get("recommendation", "UNKNOWN")
+          rec_icon = {"STABLE": "✅", "MONITOR": "⚠️", "RETRAIN_REQUIRED": "🔴", "SKIPPED": "⏭️"}.get(rec, "❓")
+
+          lines = [
+              "## FraudShield Retrain Loop",
+              "",
+              f"**Run at:** `{r.get('run_at', 'N/A')}`",
+              "",
+              "### Drift Check",
+              f"| Metric | Value |",
+              f"|--------|-------|",
+              f"| Max PSI | `{r.get('max_psi', 0):.4f}` |",
+              f"| Recommendation | {rec_icon} **{rec}** |",
+              "",
+          ]
+
+          if r.get("retrain_triggered"):
+              lines += [
+                  "### Champion vs Challenger",
+                  f"| | Version | AUC-ROC |",
+                  f"|--|---------|---------|",
+                  f"| **Champion** | `{r.get('champion_version') or 'none'}` | `{r.get('champion_auc') or 'N/A'}` |",
+                  f"| **Challenger** | `{r.get('challenger_version') or 'N/A'}` | `{r.get('challenger_auc') or 'N/A'}` |",
+                  "",
+              ]
+
+              if r.get("promoted"):
+                  delta_str = ""
+                  reason = r.get("promotion_reason", "")
+                  if "auc_delta=" in reason:
+                      delta_str = f" ({reason.split('auc_delta=')[1]})"
+                  lines.append(f"**🏆 Promoted `{r['challenger_version']}` to champion{delta_str}**")
+              else:
+                  lines.append(f"**Champion `{r.get('champion_version')}` retained** — {r.get('promotion_reason', '')}")
+          else:
+              lines.append("**No retraining triggered.** Model distribution is stable.")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(lines) + "\n")
+
+          print("Job summary written.")
+          EOF
+
+      # ── 7. Upload model artifacts ───────────────────────────────────────────
+      - name: Upload model registry artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-registry-${{ github.run_id }}
+          path: |
+            local_store/model_registry/
+            retrain_result.json
+          retention-days: 30

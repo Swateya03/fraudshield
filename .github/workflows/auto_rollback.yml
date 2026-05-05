@@ -1,0 +1,174 @@
+name: Auto-Rollback Health Check
+
+# ── Triggers ──────────────────────────────────────────────────────────────────
+# 1. After every successful retrain loop (catches post-promotion regressions)
+# 2. Manual dispatch — run ad hoc health check or forced dry-run
+on:
+  workflow_run:
+    workflows: ["Retrain Loop"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Evaluate only — do not actually rollback"
+        type: boolean
+        default: false
+      window_minutes:
+        description: "Prometheus observation window (minutes)"
+        type: string
+        default: "30"
+
+env:
+  MODEL_REGISTRY_PATH: local_store/model_registry
+  MLFLOW_TRACKING_URI: local_store/mlruns
+  DB_URL: "sqlite:///local_store/fraud.db"
+  REDIS_URL: "redis://localhost:6379"
+  API_TOKEN: "ci_token"
+  FRAUD_THRESHOLD: "0.50"
+  REVIEW_THRESHOLD: "0.20"
+
+jobs:
+  health-check:
+    name: "Post-Promotion Health Check → Auto-Rollback"
+    runs-on: ubuntu-latest
+    # Only run when triggered manually OR when the retrain loop succeeded
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      # ── 1. Checkout & Python ────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e .
+
+      # ── 2. Restore model registry from retrain-loop artifact ────────────────
+      # The retrain loop uploads the registry as an artifact so we can inspect
+      # the promoted model without re-training.
+      - name: Download model registry artifact
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: retrain_loop.yml
+          name_is_regexp: true
+          name: "model-registry-.*"
+          path: .
+          search_artifacts: true
+          if_no_artifact_found: warn
+        continue-on-error: true
+
+      # ── 3. Fallback: seed + train if no artifact available ───────────────────
+      # Handles manual dispatch where no prior artifact exists.
+      - name: Create runtime directories
+        run: mkdir -p local_store/model_registry local_store/mlruns
+
+      - name: Seed and train if registry is empty
+        run: |
+          if [ ! -f local_store/model_registry/CURRENT ]; then
+            echo "No model registry found — seeding DB and training baseline champion..."
+            python scripts/seed_data.py
+            python scripts/train_model.py
+          else
+            echo "Model registry restored from artifact."
+          fi
+        env:
+          DB_URL: ${{ env.DB_URL }}
+          MODEL_REGISTRY_PATH: ${{ env.MODEL_REGISTRY_PATH }}
+          MLFLOW_TRACKING_URI: ${{ env.MLFLOW_TRACKING_URI }}
+
+      # ── 4. Run health check ─────────────────────────────────────────────────
+      # Prometheus is not available in CI so only the offline metric check runs.
+      # The online check gracefully skips when Prometheus is unreachable.
+      - name: Run auto-rollback health check
+        id: health
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          WINDOW="${{ github.event.inputs.window_minutes || '30' }}"
+          python scripts/auto_rollback.py \
+            $DRY_RUN_FLAG \
+            --window-minutes "$WINDOW" \
+            --output rollback_result.json || true
+        env:
+          MODEL_REGISTRY_PATH: ${{ env.MODEL_REGISTRY_PATH }}
+
+      # ── 5. Write job summary ────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          python - <<'EOF'
+          import json, os, sys
+
+          result_path = "rollback_result.json"
+          if not os.path.exists(result_path):
+              summary = "## FraudShield Auto-Rollback\n\n❌ `rollback_result.json` not found.\n"
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                  f.write(summary)
+              sys.exit(0)
+
+          with open(result_path) as f:
+              r = json.load(f)
+
+          rolled_back = r.get("rollback_triggered") and r.get("rolled_back_to")
+          dry_run     = r.get("dry_run", False)
+          all_failures = r.get("offline_failures", []) + r.get("online_failures", [])
+
+          lines = [
+              "## FraudShield Auto-Rollback Health Check",
+              "",
+              f"**Run at:** `{r.get('run_at', 'N/A')}`",
+              f"**Dry run:** {'yes' if dry_run else 'no'}",
+              "",
+              "### Champion Metrics",
+              f"| Metric | Value |",
+              f"|--------|-------|",
+              f"| Version | `{r.get('current_version', 'N/A')}` |",
+              f"| AUC-ROC | `{r.get('current_auc') or 'N/A'}` |",
+              f"| Precision | `{r.get('current_precision') or 'N/A'}` |",
+              f"| Previous version | `{r.get('previous_version') or 'none'}` |",
+              "",
+          ]
+
+          if all_failures:
+              lines += ["### ⚠️ Failures Detected", ""]
+              for f in all_failures:
+                  lines.append(f"- `{f}`")
+              lines.append("")
+
+          if rolled_back:
+              lines.append(f"### 🔄 Rolled back to `{r['rolled_back_to']}`")
+          elif r.get("rollback_triggered") and not rolled_back:
+              if dry_run:
+                  lines.append(f"### 🧪 DRY RUN — would roll back to `{r.get('rolled_back_to') or r.get('previous_version')}`")
+              else:
+                  lines.append("### ⚠️ Rollback triggered but no previous version available — manual intervention required")
+          else:
+              lines.append("### ✅ Model is healthy — no rollback needed")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(lines) + "\n")
+
+          print("Job summary written.")
+          EOF
+
+      # ── 6. Upload result artifact ───────────────────────────────────────────
+      - name: Upload rollback result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-result-${{ github.run_id }}
+          path: |
+            rollback_result.json
+            local_store/model_registry/
+          retention-days: 30

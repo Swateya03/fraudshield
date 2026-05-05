@@ -131,7 +131,14 @@ class LocalFileRegistry(ModelRegistry):
         return model, metadata
 
     def promote(self, version: str) -> None:
-        """Mark version as champion. Updates current pointer."""
+        """Mark version as champion. Updates CURRENT pointer and saves previous champion to PREVIOUS."""
+        # Save current champion as PREVIOUS (enables rollback)
+        current = self._get_current_version()
+        if current and current != version:
+            previous_file = os.path.join(self.base_path, "PREVIOUS")
+            with open(previous_file, "w") as f:
+                f.write(current)
+
         # Mark old champion
         for v in self.list_versions():
             if v.is_champion:
@@ -158,6 +165,26 @@ class LocalFileRegistry(ModelRegistry):
             f.write(version)
 
         print(f"  ✓ Promoted {version} to champion")
+
+    def get_previous_version(self) -> Optional[str]:
+        """Return the version that was champion before the current one, if known."""
+        previous_file = os.path.join(self.base_path, "PREVIOUS")
+        if os.path.exists(previous_file):
+            with open(previous_file) as f:
+                return f.read().strip() or None
+        return None
+
+    def rollback(self) -> Optional[str]:
+        """Promote the previous champion. Returns rolled-back version, or None if no previous exists."""
+        previous = self.get_previous_version()
+        if not previous:
+            return None
+        self.promote(previous)
+        # Clear PREVIOUS so we don't double-rollback
+        previous_file = os.path.join(self.base_path, "PREVIOUS")
+        if os.path.exists(previous_file):
+            os.remove(previous_file)
+        return previous
 
     def list_versions(self) -> List[ModelMetadata]:
         versions = []

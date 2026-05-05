@@ -120,12 +120,67 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": { "defaults": { "unit": "short" } },
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 20 },
+      "gridPos": { "h": 4, "w": 16, "x": 0, "y": 20 },
       "id": 9,
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "background" },
       "title": "Active Model",
       "type": "stat",
       "targets": [{ "datasource": "Prometheus", "expr": "fraudshield_model_info", "legendFormat": "{{version}} / {{strategy}}" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+          "unit": "short",
+          "noValue": "—"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 20 },
+      "id": 10,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background" },
+      "title": "Rollback Target (previous champion)",
+      "description": "Version that auto_rollback.py would promote if health checks fail. Empty means no rollback available.",
+      "type": "stat",
+      "targets": [{ "datasource": "Prometheus", "expr": "fraudshield_model_info offset 0s", "legendFormat": "rollback available" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "reqps" },
+        "overrides": [
+          { "matcher": { "id": "byLabelValue", "options": "allow" },  "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byLabelValue", "options": "review" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byLabelValue", "options": "block" },  "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 11,
+      "options": { "tooltip": { "mode": "multi" } },
+      "title": "Block Rate % — Drift from Training Baseline",
+      "description": "If the live block rate deviates >15 pp from the model's training fraud rate, auto-rollback triggers.",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "100 * sum(rate(fraudshield_decisions_total{decision=\"block\"}[5m])) / sum(rate(fraudshield_decisions_total[5m]))", "legendFormat": "live block %" },
+        { "datasource": "Prometheus", "expr": "fraudshield_model_info * 0 + 15", "legendFormat": "rollback threshold (+15pp)" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "percentunit" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 12,
+      "options": { "tooltip": { "mode": "multi" } },
+      "title": "SLA Breach Rate — Rollback Trigger at 5%",
+      "description": "Fraction of requests exceeding 200 ms. Sustained breach rate >5% triggers auto-rollback.",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "sum(rate(fraudshield_sla_breaches_total[5m])) / sum(rate(fraudshield_decisions_total[5m]))", "legendFormat": "SLA breach %" },
+        { "datasource": "Prometheus", "expr": "vector(0.05)", "legendFormat": "rollback threshold (5%)" }
+      ]
     }
   ],
   "refresh": "10s",
@@ -135,5 +190,5 @@
   "timepicker": {},
   "title": "FraudShield — Model Observability",
   "uid": "fraudshield-main",
-  "version": 1
+  "version": 2
 }

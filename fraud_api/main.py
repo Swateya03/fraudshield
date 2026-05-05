@@ -21,8 +21,10 @@ from dataclasses import asdict
 
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import JSONResponse
+from fastapi.middleware.wsgi import WSGIMiddleware
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
+from prometheus_client import make_wsgi_app
 
 from fraudshield_core.models import Transaction, Channel
 from fraudshield_core.config import config
@@ -62,6 +64,7 @@ from fraud_api.events.observers import (
 # ── Service ──────────────────────────────────
 from fraud_api.services.fraud_service import FraudService
 from ml_pipeline.training.registry import LocalFileRegistry
+from fraud_api.metrics import record_score, set_model_version
 
 
 # ─────────────────────────────────────────────
@@ -103,6 +106,9 @@ app = FastAPI(
     description = "Real-time CNP fraud detection",
     version     = "1.0.0",
 )
+
+# Expose Prometheus metrics at /metrics (standard scrape endpoint)
+app.mount("/metrics", WSGIMiddleware(make_wsgi_app()))
 
 # Idempotency store (Redis in prod, dict in MVP)
 _idempotency_store: dict = {}
@@ -196,8 +202,15 @@ def _authenticate(authorization: Optional[str]) -> None:
 @app.on_event("startup")
 async def startup():
     create_all_tables()
+    # Publish which model + strategy is currently serving
+    try:
+        _, meta = _model_registry.load("current")
+        set_model_version(meta.version, scorer.strategy_name)
+    except FileNotFoundError:
+        set_model_version("none", scorer.strategy_name)
     print("[OK] FraudShield API started")
     print(f"  Strategy: {scorer.strategy_name}")
+    print(f"  Metrics:  http://localhost:{config.API_PORT}/metrics")
     print(f"  Docs:     http://localhost:{config.API_PORT}/docs")
 
 
@@ -294,6 +307,14 @@ async def score_transaction(
     # Cache for idempotency
     if idempotency_key:
         _idempotency_store[idempotency_key] = response
+
+    # Emit Prometheus metrics
+    record_score(
+        decision   = fraud_score.decision.value,
+        strategy   = scorer.strategy_name,
+        score      = fraud_score.score,
+        latency_ms = fraud_score.latency_ms,
+    )
 
     # SLA warning
     if fraud_score.latency_ms > 200:

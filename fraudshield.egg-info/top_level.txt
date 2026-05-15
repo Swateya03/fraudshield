@@ -1,3 +1,0 @@
-fraud_api
-fraudshield_core
-ml_pipeline

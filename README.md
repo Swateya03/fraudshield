@@ -13,7 +13,7 @@ The full MLOps loop is automated: **drift detection → challenger training → 
 
 1. [Development Setup](#1-development-setup)
 2. [Quick Start](#2-quick-start)
-3. [React Dashboard](#3-react-dashboard)
+3. [React Dashboard + Live Feed](#3-react-dashboard--live-feed)
 4. [Full Stack with Observability](#4-full-stack-with-observability)
 5. [Score a Transaction](#5-score-a-transaction)
 6. [MLOps Loop — Manual](#6-mlops-loop--manual)
@@ -34,15 +34,25 @@ The full MLOps loop is automated: **drift detection → challenger training → 
 
 > Required once per clone.
 
+### Environment variables
+
+```bash
+cp .env.example .env
+# Edit .env — set API_TOKEN to a strong secret for non-dev deployments.
+# All other defaults work out of the box locally.
+```
+
+### Python packages
+
 Python imports (`fraudshield_core`, `fraud_api`, `ml_pipeline`) come from this repo. Install in **editable** mode so scripts, tests, and the API all resolve packages identically:
 
 ```bash
-cd /path/to/fraudshield_mvp
+cd /path/to/fraudshield-mvp
 
 python -m venv .venv
 
 # Activate
-# Windows:    .venv\Scripts\activate
+# Windows:     .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 
 pip install -r requirements.txt
@@ -58,31 +68,38 @@ pip install -e .
 Minimum viable run — only Redis needed as an external service.
 
 ```bash
-# 1. Start Redis
+# Terminal 1 — Infrastructure
 docker-compose up -d redis
 
-# 2. Seed the database with 90 days of synthetic transactions
+# Seed the database (90 days of synthetic transactions)
 python scripts/seed_data.py
 
-# 3. Train the initial XGBoost champion model
+# Train the initial XGBoost champion model
 python scripts/train_model.py
 
-# 4. Start the API
-python fraud_api/main.py
+# Terminal 1 — API
+python -m fraud_api.main
+
+# Terminal 2 — Dashboard
+cd dashboard && npm install && npm run dev
+
+# Terminal 3 — Live transaction simulator (makes the Live Feed look real)
+python scripts/simulate_live.py
 ```
 
 | Endpoint | URL |
 |---|---|
 | API | http://localhost:8000 |
 | Interactive docs | http://localhost:8000/docs |
+| React dashboard | http://localhost:5173 |
 | Prometheus metrics | http://localhost:8000/metrics |
 | Health check | http://localhost:8000/health |
 
 ---
 
-## 3. React Dashboard
+## 3. React Dashboard + Live Feed
 
-The `dashboard/` directory is a React + Vite single-page app. It provides a live UI for the Live Feed, Transaction Explorer, Risk Manager, and Model Performance pages.
+The `dashboard/` directory is a React + Vite single-page app providing a real-time fraud analyst interface.
 
 ### Install
 
@@ -93,21 +110,26 @@ npm install
 
 ### Run
 
-**With the Python API already running** (run on seperate terminal while api is already running, recommended for full data):
+**Full stack (recommended):**
 
 ```bash
-npm run dev
+# Terminal 1
+python -m fraud_api.main
+
+# Terminal 2
+cd dashboard && npm run dev
+
+# Terminal 3 — continuous transaction stream
+python scripts/simulate_live.py
 ```
 
-Opens at **http://localhost:5173**. Connects to the API at `http://localhost:8000`.
+The Live Feed connects via **Server-Sent Events** (SSE) — every scored transaction appears instantly with no polling delay. The connection indicator shows **● Live** (green) when the SSE stream is active.
 
 **Without the Python API** (mock data, no setup required):
 
 ```bash
 npm run dev:stack
 ```
-
-Starts a lightweight Node mock-API alongside the Vite dev server. Useful for frontend-only development.
 
 **Production build:**
 
@@ -116,14 +138,26 @@ npm run build    # outputs to dashboard/dist/
 npm run preview  # serve the production bundle locally
 ```
 
+### Simulator options
+
+```bash
+python scripts/simulate_live.py             # ~1 transaction every 2.5 seconds (default)
+python scripts/simulate_live.py --rate 1.0  # faster — 1 transaction/second
+python scripts/simulate_live.py --rate 5.0  # slower — 1 transaction/5 seconds
+```
+
+The simulator generates a realistic mix: **80% legitimate**, **12% suspicious**, **8% fraud** — across 15 users, 10 merchants, all 5 payment channels, and 3 currencies (INR/USD/EUR).
+
 ### Dashboard pages
 
 | Page | What it shows |
 |---|---|
-| Live Feed | Real-time transaction decisions as they are scored |
-| Explorer | Searchable + filterable transaction history |
+| Live Feed | Real-time transaction stream via SSE — instant push, no polling |
+| Explorer | Searchable + filterable transaction history with SHAP reason codes |
 | Risk Manager | User risk tier overrides and KYC status |
 | Model Performance | Champion model metrics, version history, drift report |
+
+> **Score Explainer** submissions use `dry_run: true` — they return the full fraud probability and SHAP breakdown but are **never saved to the database** and **never appear in the Live Feed**. This keeps the feed clean for real operational transactions only.
 
 ---
 
@@ -144,23 +178,11 @@ docker-compose up
 
 Grafana auto-provisions the **FraudShield — Model Observability** dashboard on first boot. No manual setup required.
 
-To run services in the background:
-
 ```bash
-docker-compose up -d
-docker-compose logs -f  # stream logs
-```
-
-To stop everything and keep data:
-
-```bash
-docker-compose down
-```
-
-To reset all volumes (clears Prometheus and Grafana data):
-
-```bash
-docker-compose down -v
+docker-compose up -d          # background
+docker-compose logs -f        # stream logs
+docker-compose down           # stop, keep data
+docker-compose down -v        # stop + wipe all volumes
 ```
 
 ---
@@ -187,21 +209,53 @@ Expected response:
 ```json
 {
   "transaction_id": "txn_demo_001",
-  "fraud_probability": 0.94,
+  "fraud_probability": 0.89,
   "decision": "block",
   "reason_codes": [
-    {"code": "high_risk_ip",       "contribution": 0.40},
-    {"code": "amount_spike",       "contribution": 0.25},
-    {"code": "high_risk_merchant", "contribution": 0.20},
-    {"code": "new_device",         "contribution": 0.30}
+    {"code": "high_risk_ip",       "contribution": 2.497},
+    {"code": "channel_risk",       "contribution": 1.356},
+    {"code": "high_risk_merchant", "contribution": 0.837}
   ],
   "model_version": "v1.0.0",
-  "latency_ms": 47,
+  "latency_ms": 18,
   "request_id": "req_abc123"
 }
 ```
 
-For idempotent retries, include an `Idempotency-Key` header — the same key always returns the same cached response:
+### Currency normalisation
+
+All amount-based features (`amount_ratio`, `amount_zscore`, `log_amount`) are computed on the **INR-equivalent** of the transaction amount before scoring. Exchange rates are configured in `.env`:
+
+```bash
+FX_USD=83.0   # 1 USD = 83 INR
+FX_EUR=90.0   # 1 EUR = 90 INR
+FX_GBP=105.0
+```
+
+A USD $3,000 transaction is treated as ₹2,49,000 — a 498× amount spike for a user whose average transaction is ₹500 — and scores significantly higher than an INR ₹3,000 transaction. This makes foreign-currency fraud visible without retraining the model.
+
+### Dry run (no persistence)
+
+Add `"dry_run": true` to get the full score + SHAP breakdown without writing anything to the database or the Live Feed:
+
+```bash
+curl -X POST http://localhost:8000/v1/transactions/score \
+  -H "Authorization: Bearer dev_token_fraudshield_local_only" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transaction_id": "txn_test_001",
+    "user_id": "u_0001",
+    "merchant_id": "m_crypto",
+    "amount": 45000,
+    "currency": "USD",
+    "channel": "online",
+    "dry_run": true
+  }'
+```
+
+### Idempotent retries
+
+Include an `Idempotency-Key` header — the same key always returns the same cached response (24-hour TTL in Redis):
 
 ```bash
 curl -X POST http://localhost:8000/v1/transactions/score \
@@ -215,37 +269,31 @@ curl -X POST http://localhost:8000/v1/transactions/score \
 
 ## 6. MLOps Loop — Manual
 
-Run the loop step by step from the terminal:
-
 ```bash
 # Step 1 — Check feature drift (PSI across all monitored features)
 python scripts/check_drift.py
 
-# Step 2 — (Optional) Inject a simulated concept drift to trigger retraining
+# Step 2 — (Optional) Inject simulated concept drift to trigger retraining
 python scripts/inject_drift.py
 
-# Step 3 — Run the full retrain loop manually
-#   Checks drift → trains challenger → compares AUC → promotes if challenger wins
+# Step 3 — Full retrain loop: drift → challenger → champion/challenger → promote
 python scripts/retrain_loop.py
 
-# Force a retrain even if drift is within safe range
+# Force retrain even when drift is within safe range
 python scripts/retrain_loop.py --force true
 
-# Save the result to a custom path
-python scripts/retrain_loop.py --force true --output my_result.json
-
-# Step 4 — After retraining, run the health check
+# Step 4 — Post-promotion health check
 python scripts/auto_rollback.py
 
-# Dry-run: evaluate without actually rolling back
+# Dry-run: evaluate without rolling back
 python scripts/auto_rollback.py --dry-run
 ```
 
-`retrain_result.json` is written after every run with a full summary:
+`retrain_result.json` is written after every run:
 
 ```json
 {
-  "run_at": "2026-05-06T10:00:00",
+  "run_at": "2026-05-16T10:00:00",
   "recommendation": "RETRAIN_REQUIRED",
   "max_psi": 0.32,
   "retrain_triggered": true,
@@ -276,7 +324,7 @@ Runs **daily at 02:00 UTC**. Steps:
 
 **Manual trigger with force flag:**
 
-Go to **Actions → Retrain Loop → Run workflow** and set `force_retrain = true` to retrain even when drift is within safe range.
+Go to **Actions → Retrain Loop → Run workflow** and set `force_retrain = true`.
 
 ### Auto-Rollback (`auto_rollback.yml`)
 
@@ -289,17 +337,13 @@ Steps:
 
 **Manual trigger with dry-run:**
 
-Go to **Actions → Auto-Rollback Health Check → Run workflow**, set `dry_run = true` to inspect without promoting.
+Go to **Actions → Auto-Rollback Health Check → Run workflow**, set `dry_run = true`.
 
 ---
 
 ## 8. Auto-Rollback
 
-The auto-rollback system has two layers of protection:
-
 ### Offline check (always runs)
-
-Validates the champion's training metrics against minimum floors. Triggers rollback immediately if either fails.
 
 | Metric | Minimum | What it catches |
 |---|---|---|
@@ -308,45 +352,19 @@ Validates the champion's training metrics against minimum floors. Triggers rollb
 
 ### Online check (when Prometheus is reachable)
 
-Queries live production metrics over a configurable window (default: last 30 minutes).
-
 | Signal | Threshold | What it catches |
 |---|---|---|
-| Block rate deviation | > 15 percentage points from training `fraud_rate` | Miscalibrated model |
+| Block rate deviation | > 15 pp from training `fraud_rate` | Miscalibrated model |
 | SLA breach rate | > 5% of decisions > 200 ms | Latency regression |
 
 ### Rollback mechanism
 
-Every time a model is promoted, the previous champion version is saved in `local_store/model_registry/PREVIOUS`. If a health check fails, `registry.rollback()` promotes the previous version and clears `PREVIOUS` to prevent double-rollback.
+Every promotion saves the previous champion to `PREVIOUS`. On health check failure, `registry.rollback()` restores it.
 
 ```bash
-# Run a health check against a running Prometheus instance
-python scripts/auto_rollback.py \
-  --prometheus-url http://localhost:9090 \
-  --window-minutes 30
-
-# Dry-run: see what would happen without making changes
+python scripts/auto_rollback.py --prometheus-url http://localhost:9090 --window-minutes 30
 python scripts/auto_rollback.py --dry-run
-
-# Custom result output
 python scripts/auto_rollback.py --output health_check.json
-```
-
-`rollback_result.json` written after every run:
-
-```json
-{
-  "run_at": "2026-05-06T10:05:00",
-  "current_version": "v1.1.0",
-  "current_auc": 0.9344,
-  "current_precision": 0.8712,
-  "previous_version": "v1.0.0",
-  "offline_failures": [],
-  "online_failures": [],
-  "rollback_triggered": false,
-  "rolled_back_to": null,
-  "dry_run": false
-}
 ```
 
 Exit codes: `0` = healthy, `1` = fatal error, `2` = rollback triggered.
@@ -375,29 +393,21 @@ device_trust_score   0.198     MONITOR
 Max PSI: 0.241 → RETRAIN_REQUIRED
 ```
 
-PSI thresholds:
-
 | PSI | Meaning |
 |---|---|
 | < 0.10 | STABLE — no action needed |
 | 0.10 – 0.20 | MONITOR — watch next window |
 | > 0.20 | RETRAIN_REQUIRED — trigger challenger |
 
-To simulate a concept drift before testing the retrain loop:
-
 ```bash
-python scripts/inject_drift.py
+python scripts/inject_drift.py   # simulate Month 2 fraud pattern
 ```
-
-This inserts a month of "Month 2 fraud" — known device + clean VPN IP + daytime + split amounts — causing PSI to spike on `device_trust_score`, `ip_fraud_history`, and `is_late_night`.
 
 ---
 
 ## 10. Grafana Dashboard
 
 Open **http://localhost:3000** → login with `admin / fraudshield` → the **FraudShield — Model Observability** dashboard loads automatically.
-
-Dashboard panels (12 total):
 
 **Top row — stat cards:**
 
@@ -422,27 +432,25 @@ Dashboard panels (12 total):
 | Panel | What it shows |
 |---|---|
 | Active Model | Current champion version + strategy |
-| Rollback Target | Previous champion (rollback destination if triggered) |
-| Block Rate % — Drift from Training Baseline | Live block rate vs rollback threshold (+15 pp) |
+| Rollback Target | Previous champion (rollback destination) |
+| Block Rate % Drift | Live block rate vs rollback threshold (+15 pp) |
 | SLA Breach Rate | Breach rate vs rollback threshold (5%) |
 
-The dashboard refreshes every **10 seconds** and defaults to the **last 1 hour** window.
+Refreshes every **10 seconds**, defaults to the **last 1 hour** window.
 
 ---
 
 ## 11. Prometheus Metrics
 
-The API exposes metrics at `/metrics` (standard Prometheus scrape format). Scraped every 15 seconds by the Prometheus container.
+Exposed at `/metrics`. Scraped every 15 seconds by the Prometheus container.
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
 | `fraudshield_decisions_total` | Counter | `decision`, `strategy` | Total scoring decisions |
-| `fraudshield_score` | Histogram | — | Raw fraud score distribution (buckets 0–1) |
-| `fraudshield_scoring_latency_seconds` | Histogram | — | End-to-end scoring time (buckets 5ms–1s) |
-| `fraudshield_sla_breaches_total` | Counter | — | Decisions that took > 200 ms |
-| `fraudshield_model_info` | Gauge | `version`, `strategy` | Currently loaded model (always 1) |
-
-Useful PromQL queries:
+| `fraudshield_score` | Histogram | — | Raw fraud score distribution |
+| `fraudshield_scoring_latency_seconds` | Histogram | — | End-to-end scoring time |
+| `fraudshield_sla_breaches_total` | Counter | — | Decisions > 200 ms |
+| `fraudshield_model_info` | Gauge | `version`, `strategy` | Currently loaded model |
 
 ```promql
 # Live block rate %
@@ -452,51 +460,31 @@ Useful PromQL queries:
 # p95 latency
 histogram_quantile(0.95,
   sum(rate(fraudshield_scoring_latency_seconds_bucket[5m])) by (le))
-
-# SLA breach rate
-sum(rate(fraudshield_sla_breaches_total[5m]))
-  / sum(rate(fraudshield_decisions_total[5m]))
-
-# Which model is live
-fraudshield_model_info
 ```
 
 ---
 
 ## 12. Running Tests
 
-### Unit + integration tests (no Redis required)
-
 ```bash
-pytest tests/test_scoring.py tests/test_repository.py -v
-pytest tests/test_api.py -v
-
-# Or everything at once
+# Unit + integration (no Redis required)
 pytest tests/ -v --tb=short
-```
 
-### Redis integration tests
-
-These tests exercise velocity counters, the offline feature store, and the idempotency cache against a real Redis instance. They are automatically skipped when Redis is unavailable.
-
-```bash
-# Start Redis first
+# Redis integration tests (velocity, feature store, idempotency)
 docker-compose up -d redis
-# or: docker run -d -p 6379:6379 redis:7-alpine
-
 pytest tests/test_redis_features.py -v
 ```
 
-In CI these run in the `redis-integration` job which spins up a `redis:7-alpine` service container automatically.
+Redis tests auto-skip when Redis is unavailable. In CI they run in the `redis-integration` job with a `redis:7-alpine` service container.
 
 ---
 
 ## 13. API Reference
 
-All endpoints (except `/health` and `/metrics`) require:
+All endpoints except `/health` and `/metrics` require:
 
 ```
-Authorization: Bearer dev_token_fraudshield_local_only
+Authorization: Bearer <API_TOKEN>
 ```
 
 | Method | Endpoint | Description |
@@ -504,6 +492,7 @@ Authorization: Bearer dev_token_fraudshield_local_only
 | `GET` | `/health` | Liveness check — returns strategy + version |
 | `GET` | `/metrics` | Prometheus scrape endpoint |
 | `POST` | `/v1/transactions/score` | Score a transaction for CNP fraud |
+| `GET` | `/v1/stream` | SSE stream — push event per scored transaction |
 | `GET` | `/v1/transactions` | List recent scored transactions |
 | `GET` | `/v1/transactions/{id}` | Fetch a single transaction + score |
 | `GET` | `/v1/users/{id}` | Fetch user profile |
@@ -511,9 +500,11 @@ Authorization: Bearer dev_token_fraudshield_local_only
 | `POST` | `/v1/labels` | Submit a fraud label (chargeback / review) |
 | `GET` | `/v1/model/info` | Current champion model metadata |
 | `GET` | `/v1/model/versions` | All versions in the registry |
-| `POST` | `/v1/model/reload` | Hot-reload the current champion without restarting |
+| `POST` | `/v1/model/reload` | Hot-reload champion without restarting |
 | `GET` | `/v1/drift/report` | Run PSI drift report (live) |
 | `GET` | `/v1/dashboard/stats` | 24-hour scoring summary |
+
+> `GET /v1/stream` authenticates via `?token=` query parameter (browsers cannot set headers on EventSource connections).
 
 Interactive docs: **http://localhost:8000/docs**
 
@@ -526,7 +517,7 @@ Interactive docs: **http://localhost:8000/docs**
 │                FraudShield — Full Architecture                 │
 ├────────────────────────────────────────────────────────────────┤
 │                                                                │
-│  Payment Gateway                                               │
+│  Payment Gateway / Simulator                                   │
 │       │ POST /v1/transactions/score                            │
 │       ▼                                                        │
 │  [fraud_api/main.py]   ←── Bearer auth + idempotency key       │
@@ -535,6 +526,7 @@ Interactive docs: **http://localhost:8000/docs**
 │  [FraudService]                                                │
 │       ├── UserRepository.get_by_id()     → SQLite / Postgres   │
 │       ├── FeatureBuilder.build()         → Redis + DB          │
+│       │     └─ currency normalisation   → amount → INR equiv   │
 │       ├── FraudScorer.score()            → Strategy (below)    │
 │       └── EventPublisher.publish()       → Observers           │
 │                                                                │
@@ -542,7 +534,11 @@ Interactive docs: **http://localhost:8000/docs**
 │       ├── RuleBasedStrategy   (fallback, no model needed)      │
 │       └── XGBoostStrategy     (calibrated, SHAP reason codes)  │
 │                                                                │
+│  [SSEBroadcaster] ←── broadcasts every non-dry-run score       │
+│       └─ GET /v1/stream → LiveFeed (instant push, no polling)  │
+│                                                                │
 │  [Redis]   velocity counters (1h/6h/24h) + offline features   │
+│            + idempotency cache (24h TTL)                       │
 │  [SQLite]  users, transactions, scores, labels, history        │
 │                                                                │
 │  [Prometheus] ← scrapes /metrics every 15s                     │
@@ -573,7 +569,7 @@ Interactive docs: **http://localhost:8000/docs**
 ## 15. Project Structure
 
 ```
-fraudshield_mvp/
+fraudshield-mvp/
 │
 ├── fraud_api/                  ← Core scoring API (FastAPI)
 │   ├── main.py                 ← Wire-up: DI, routes, /metrics mount
@@ -584,13 +580,14 @@ fraudshield_mvp/
 │   │   └── inmemory_repo.py    ← In-memory (tests / dev)
 │   ├── scoring/                ← ML scoring pipeline (Strategy pattern)
 │   │   ├── scorer.py           ← FraudScorer (strategy-agnostic)
-│   │   ├── feature_builder.py  ← Builds FeatureVector from Transaction
+│   │   ├── feature_builder.py  ← Builds FeatureVector (+ currency normalisation)
 │   │   └── strategies/
 │   │       ├── rule_based.py   ← Deterministic rules + SHAP-style codes
 │   │       └── xgboost_strategy.py ← Calibrated XGBoost + SHAP
 │   ├── events/                 ← Observer pattern
 │   │   ├── publisher.py        ← InMemoryPublisher (→ RedisStreams in prod)
-│   │   └── observers.py        ← audit_log, alert, risk_tier_updater
+│   │   ├── observers.py        ← audit_log, alert, risk_tier_updater
+│   │   └── sse_broadcaster.py  ← In-process SSE pub/sub for Live Feed
 │   └── services/
 │       └── fraud_service.py    ← Orchestrates repo + scorer + publisher
 │
@@ -606,17 +603,18 @@ fraudshield_mvp/
 │   │   ├── pu_learning.py      ← PU Learning (positive-unlabeled)
 │   │   └── registry.py         ← LocalFileRegistry (champion/challenger)
 │   └── monitoring/
-│       └── drift.py            ← PSI drift detection (Evidently)
+│       └── drift.py            ← PSI drift detection
 │
 ├── fraudshield_core/           ← Domain layer (no framework deps)
-│   ├── models.py               ← All domain models (Transaction, FeatureVector, …)
-│   ├── config.py               ← Env-var config (dotenv)
+│   ├── models.py               ← All domain models + CHANNEL_RISK mapping
+│   ├── config.py               ← Env-var config (dotenv) + exchange rates
 │   ├── db.py                   ← SQLAlchemy engine + table creation
-│   └── redis_client.py         ← Redis connection
+│   └── redis_client.py         ← Redis connection singleton
 │
 ├── scripts/                    ← CLI tools
 │   ├── seed_data.py            ← Populate DB with 90 days of synthetic data
 │   ├── train_model.py          ← Train + register champion
+│   ├── simulate_live.py        ← Continuous live transaction stream (15 users, 10 merchants)
 │   ├── score_transaction.py    ← Interactive terminal scorer + labeler
 │   ├── check_drift.py          ← PSI drift report
 │   ├── inject_drift.py         ← Simulate concept drift (Month 2 fraud)
@@ -626,26 +624,21 @@ fraudshield_mvp/
 ├── dashboard/                  ← React + Vite single-page app
 │   ├── src/
 │   │   ├── App.jsx             ← Router + layout
-│   │   ├── pages/              ← LiveFeed, Explorer, RiskManager, ModelPerformance
+│   │   ├── pages/              ← LiveFeed (SSE), Explorer, RiskManager, ModelPerformance
 │   │   ├── components/         ← Shared UI components
-│   │   ├── hooks/              ← Custom React hooks
-│   │   ├── api/                ← API client (points to :8000)
-│   │   └── lib/                ← Utilities
+│   │   ├── api/client.js       ← API client (points to :8000)
+│   │   └── lib/utils.js        ← fmtAmount(n, currency), fmtTime, scoreColor …
 │   ├── dev-api.mjs             ← Lightweight Node mock API for frontend-only dev
 │   └── package.json            ← npm scripts: dev, dev:stack, build, preview
 │
 ├── monitoring/                 ← Observability config
-│   ├── prometheus.yml          ← Scrape config (fraud-api:8000/metrics, 15s)
+│   ├── prometheus.yml          ← Scrape config (15s)
 │   └── grafana/
-│       ├── provisioning/
-│       │   ├── datasources/    ← Auto-provisions Prometheus datasource
-│       │   └── dashboards/     ← Auto-provisions dashboard location
 │       └── dashboards/
 │           └── fraudshield.json ← 12-panel Model Observability dashboard
 │
 ├── .github/workflows/
 │   ├── test.yml                ← pytest + Redis integration on every push/PR
-│   ├── deploy.yml              ← Deploy gate (runs after tests)
 │   ├── retrain_loop.yml        ← Daily cron drift → retrain → promote
 │   └── auto_rollback.yml       ← Post-promotion health check → rollback
 │
@@ -653,19 +646,20 @@ fraudshield_mvp/
 │   ├── test_api.py             ← FastAPI route tests (httpx)
 │   ├── test_scoring.py         ← Scoring strategy + rule tests
 │   ├── test_repository.py      ← Repository layer tests
-│   └── test_redis_features.py  ← Redis integration tests (velocity, features, idempotency)
+│   └── test_redis_features.py  ← Redis integration tests
 │
 ├── docker-compose.yml          ← Redis, Postgres, Prometheus, Grafana
 ├── requirements.txt
 ├── setup.py
-└── local_store/                ← Runtime artifacts (gitignored)
+├── .env.example                ← Environment template — copy to .env before running
+└── local_store/                ← Runtime artifacts (contents gitignored, dir tracked)
     ├── fraud.db                ← SQLite database
     ├── model_registry/         ← Versioned model artifacts
     │   ├── v1.0.0/
     │   │   ├── model.pkl
     │   │   └── metadata.json
     │   ├── CURRENT             ← Points to champion version
-    │   └── PREVIOUS            ← Points to pre-promotion champion (rollback target)
+    │   └── PREVIOUS            ← Rollback target
     └── mlruns/                 ← MLflow experiment tracking
 ```
 
@@ -679,8 +673,10 @@ The architecture is designed so each component is a one-line swap in `fraud_api/
 |---|---|---|---|
 | Database | SQLite | PostgreSQL | `main.py`: swap `SQLiteUserRepository` → `PostgreSQLUserRepository` |
 | Event bus | In-memory dict | Kafka / Redis Streams | `main.py`: swap `InMemoryPublisher` → `RedisStreamsPublisher` |
+| SSE stream | In-process queue | Redis Pub/Sub (multi-instance) | `sse_broadcaster.py`: swap `asyncio.Queue` → Redis channel |
 | Scoring strategy | XGBoost local | Remote model server | `main.py`: swap `XGBoostStrategy` → `RemoteModelStrategy` |
 | Model registry | Local files | MLflow server | `registry.py`: swap `LocalFileRegistry` → `MLflowRegistry` |
 | Feature store | Redis dict | Feast / Tecton | `feature_builder.py`: swap Redis lookups → Feast SDK calls |
+| Exchange rates | `.env` constants | Central FX API | `config.py`: fetch live rates on startup |
 | Scheduler | GitHub Actions cron | Apache Airflow | Add `dags/retrain_dag.py` |
 | Observability | Prometheus + Grafana | Same — already production-grade | No change needed |

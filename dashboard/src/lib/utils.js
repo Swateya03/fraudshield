@@ -5,10 +5,11 @@ export function cn(...inputs) {
   return twMerge(clsx(inputs))
 }
 
-export function fmtAmount(n) {
+export function fmtAmount(n, currency = 'INR') {
   if (n == null) return '—'
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency', currency: 'INR', maximumFractionDigits: 0,
+  const locale = currency === 'INR' ? 'en-IN' : 'en-US'
+  return new Intl.NumberFormat(locale, {
+    style: 'currency', currency, maximumFractionDigits: 0,
   }).format(n)
 }
 

@@ -9,6 +9,7 @@ between every layer of the system.
 """
 
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from typing import Optional, List
 from datetime import datetime
@@ -39,6 +40,17 @@ class Channel(str, Enum):
     ATM      = "atm"
     UPI      = "upi"
     NFC      = "nfc"
+
+
+# CNP fraud risk by payment channel — single source of truth for both
+# inference (feature_builder) and training (dataset.py).
+CHANNEL_RISK: dict = {
+    "online": 1.0,   # card-not-present, highest CNP fraud exposure
+    "upi":    0.6,   # common in India, account-takeover patterns
+    "atm":    0.4,   # physical card required, medium risk
+    "pos":    0.2,   # physical card + PIN, low CNP risk
+    "nfc":    0.1,   # tap-to-pay with device present, lowest risk
+}
 
 
 class Decision(str, Enum):
@@ -192,9 +204,12 @@ class FeatureVector:
     # ── Day 6 features ──
     time_since_last_txn_secs:  float = 86400.0
 
+    # ── Channel feature ──
+    channel_risk:              float = 0.5    # 0.1 (nfc/pos) → 1.0 (online)
+
     def to_model_input(self) -> list:
         """Returns ordered list for XGBoost input. Order MUST match training."""
-        return [
+        raw = [
             self.velocity_1h,
             self.velocity_6h,
             self.velocity_24h,
@@ -215,7 +230,18 @@ class FeatureVector:
             self.merchant_tenure_days,
             self.hours_since_profile_update,
             self.time_since_last_txn_secs,
+            self.channel_risk,
         ]
+        sanitized, bad = [], []
+        for name, val in zip(self.FEATURE_NAMES, raw):
+            if isinstance(val, float) and not math.isfinite(val):
+                bad.append(name)
+                sanitized.append(0.0)
+            else:
+                sanitized.append(val)
+        if bad:
+            print(f"  [FeatureVector] Sanitized non-finite values → 0.0 for: {bad}")
+        return sanitized
 
     FEATURE_NAMES = [
         "velocity_1h", "velocity_6h", "velocity_24h",
@@ -226,6 +252,7 @@ class FeatureVector:
         "log_amount", "is_round_amount", "is_weekend",
         "merchant_tenure_days", "hours_since_profile_update",
         "time_since_last_txn_secs",
+        "channel_risk",
     ]
 
 

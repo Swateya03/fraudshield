@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Activity, TrendingUp, TrendingDown, Shield } from 'lucide-react'
+import { Activity } from 'lucide-react'
 import { getTransactions, getDashboardStats } from '../api/client'
 import { fmtAmount, fmtTime, decisionClass, scoreColor, shortId } from '../lib/utils'
+
+const SSE_TOKEN = import.meta.env.VITE_API_TOKEN || 'dev_token_fraudshield_local_only'
 
 const MAX_FEED = 50
 
@@ -12,6 +14,23 @@ function StatCard({ label, value, sub, color = 'text-slate-100' }) {
       <div className="stat-lbl">{label}</div>
       {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
     </div>
+  )
+}
+
+const CHANNEL_STYLES = {
+  online: 'bg-blue-900/40 text-blue-300 border-blue-700/40',
+  upi:    'bg-purple-900/40 text-purple-300 border-purple-700/40',
+  pos:    'bg-emerald-900/40 text-emerald-300 border-emerald-700/40',
+  atm:    'bg-yellow-900/40 text-yellow-300 border-yellow-700/40',
+  nfc:    'bg-slate-800 text-slate-400 border-slate-600',
+}
+
+function ChannelBadge({ channel }) {
+  const cls = CHANNEL_STYLES[channel] ?? 'bg-slate-800 text-slate-400 border-slate-600'
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-xs font-mono border ${cls}`}>
+      {channel || '—'}
+    </span>
   )
 }
 
@@ -37,35 +56,47 @@ export default function LiveFeed() {
 
   useEffect(() => { pausedRef.current = paused }, [paused])
 
-  // Poll transactions
+  // Load recent history on mount so the table isn't empty when you first open the page
   useEffect(() => {
-    let prev = new Set()
-
-    async function poll() {
-      try {
-        const data = await getTransactions({ limit: 20, order: 'desc' })
+    getTransactions({ limit: 50, order: 'desc' })
+      .then(data => {
         const txns = Array.isArray(data) ? data : (data.transactions || data.items || [])
-        if (!pausedRef.current) {
-          setFeed(old => {
-            const seen = new Set(old.map(t => t.transaction_id || t.id))
-            const fresh = txns.filter(t => !seen.has(t.transaction_id || t.id))
-            return [...fresh, ...old].slice(0, MAX_FEED)
-          })
-        }
-      } catch (_) {}
-    }
+        setFeed(txns.slice(0, MAX_FEED))
+      })
+      .catch(() => {})
+  }, [])
 
-    async function pollStats() {
+  // SSE — push new transactions instantly as they are scored
+  const [connected, setConnected] = useState(false)
+  useEffect(() => {
+    const es = new EventSource(`/api/v1/stream?token=${SSE_TOKEN}`)
+
+    es.onopen = () => setConnected(true)
+
+    es.onmessage = (e) => {
+      if (e.data.startsWith(':')) return   // keepalive comment
+      if (pausedRef.current) return
       try {
-        const s = await getDashboardStats()
-        setStats(s)
+        const txn = JSON.parse(e.data)
+        setFeed(old => {
+          const seen = new Set(old.map(t => t.transaction_id || t.id))
+          if (seen.has(txn.transaction_id)) return old
+          return [txn, ...old].slice(0, MAX_FEED)
+        })
       } catch (_) {}
     }
 
-    poll(); pollStats()
-    const t1 = setInterval(poll,      3000)
-    const t2 = setInterval(pollStats, 10000)
-    return () => { clearInterval(t1); clearInterval(t2) }
+    es.onerror = () => setConnected(false)
+
+    return () => { es.close(); setConnected(false) }
+  }, [])
+
+  // Stats still polled — no need for SSE on aggregate numbers
+  useEffect(() => {
+    const fetchStats = () => getDashboardStats().then(setStats).catch(() => {})
+    fetchStats()
+    const t = setInterval(fetchStats, 10000)
+    return () => clearInterval(t)
   }, [])
 
   const blocked = feed.filter(t => t.decision === 'block').length
@@ -83,7 +114,10 @@ export default function LiveFeed() {
             Live Transaction Feed
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Polling every 3 seconds · last {feed.length} transactions
+            <span className={connected ? 'text-allow-text' : 'text-slate-600'}>
+              {connected ? '● Live' : '○ Connecting…'}
+            </span>
+            {' '}· {feed.length} transactions
           </p>
         </div>
         <button
@@ -142,6 +176,8 @@ export default function LiveFeed() {
                 <th className="tcell text-left font-medium">Txn ID</th>
                 <th className="tcell text-left font-medium">User</th>
                 <th className="tcell text-left font-medium">Merchant</th>
+                <th className="tcell text-left font-medium">Channel</th>
+                <th className="tcell text-left font-medium">IP</th>
                 <th className="tcell text-right font-medium">Amount</th>
                 <th className="tcell text-left font-medium">Score</th>
                 <th className="tcell text-left font-medium">Decision</th>
@@ -150,8 +186,8 @@ export default function LiveFeed() {
             <tbody>
               {feed.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="tcell text-center text-slate-600 py-12">
-                    No transactions yet — send a request to the API to see the feed
+                  <td colSpan={9} className="tcell text-center text-slate-600 py-12">
+                    No transactions yet — run scripts/simulate_live.py to start the feed
                   </td>
                 </tr>
               )}
@@ -170,8 +206,14 @@ export default function LiveFeed() {
                   <td className="tcell text-xs text-slate-400">
                     {txn.merchant_id}
                   </td>
+                  <td className="tcell">
+                    <ChannelBadge channel={txn.channel} />
+                  </td>
+                  <td className="tcell font-mono text-xs text-slate-500">
+                    {txn.ip_address || '—'}
+                  </td>
                   <td className="tcell font-mono text-xs text-right text-slate-200">
-                    {fmtAmount(txn.amount)}
+                    {fmtAmount(txn.amount, txn.currency)}
                   </td>
                   <td className="tcell">
                     <ScoreBar score={txn.fraud_probability ?? txn.score ?? 0} />

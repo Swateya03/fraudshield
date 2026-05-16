@@ -78,6 +78,7 @@ export default function ScoreExplainer() {
         currency:    form.currency,
         channel:     form.channel,
         ip_address:  form.ip_address || undefined,
+        dry_run:     true,
       })
       setResult(res)
     } catch (e) {
@@ -123,7 +124,7 @@ export default function ScoreExplainer() {
           {[
             { key: 'user_id',     label: 'User ID' },
             { key: 'merchant_id', label: 'Merchant ID' },
-            { key: 'amount',      label: 'Amount (INR)', type: 'number' },
+            { key: 'amount',      label: `Amount (${form.currency})`, type: 'number' },
             { key: 'ip_address',  label: 'IP Address' },
           ].map(({ key, label, type = 'text' }) => (
             <div key={key}>

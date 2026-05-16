@@ -8,7 +8,6 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
-local_store/
 local_store/fraud.db*
 local_store/test_api.db
 local_store/mlruns/

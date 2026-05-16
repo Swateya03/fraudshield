@@ -13,19 +13,20 @@ The full MLOps loop is automated: **drift detection → challenger training → 
 
 1. [Development Setup](#1-development-setup)
 2. [Quick Start](#2-quick-start)
-3. [Full Stack with Observability](#3-full-stack-with-observability)
-4. [Score a Transaction](#4-score-a-transaction)
-5. [MLOps Loop — Manual](#5-mlops-loop--manual)
-6. [MLOps Loop — Automated (CI)](#6-mlops-loop--automated-ci)
-7. [Auto-Rollback](#7-auto-rollback)
-8. [Drift Detection](#8-drift-detection)
-9. [Grafana Dashboard](#9-grafana-dashboard)
-10. [Prometheus Metrics](#10-prometheus-metrics)
-11. [Running Tests](#11-running-tests)
-12. [API Reference](#12-api-reference)
-13. [Architecture](#13-architecture)
-14. [Project Structure](#14-project-structure)
-15. [Production Scaling](#15-production-scaling)
+3. [React Dashboard](#3-react-dashboard)
+4. [Full Stack with Observability](#4-full-stack-with-observability)
+5. [Score a Transaction](#5-score-a-transaction)
+6. [MLOps Loop — Manual](#6-mlops-loop--manual)
+7. [MLOps Loop — Automated (CI)](#7-mlops-loop--automated-ci)
+8. [Auto-Rollback](#8-auto-rollback)
+9. [Drift Detection](#9-drift-detection)
+10. [Grafana Dashboard](#10-grafana-dashboard)
+11. [Prometheus Metrics](#11-prometheus-metrics)
+12. [Running Tests](#12-running-tests)
+13. [API Reference](#13-api-reference)
+14. [Architecture](#14-architecture)
+15. [Project Structure](#15-project-structure)
+16. [Production Scaling](#16-production-scaling)
 
 ---
 
@@ -60,16 +61,13 @@ Minimum viable run — only Redis needed as an external service.
 # 1. Start Redis
 docker-compose up -d redis
 
-# 2. Create runtime directories (gitignored; SQLite needs these)
-mkdir -p local_store/model_registry local_store/mlruns
-
-# 3. Seed the database with 90 days of synthetic transactions
+# 2. Seed the database with 90 days of synthetic transactions
 python scripts/seed_data.py
 
-# 4. Train the initial XGBoost champion model
+# 3. Train the initial XGBoost champion model
 python scripts/train_model.py
 
-# 5. Start the API
+# 4. Start the API
 python fraud_api/main.py
 ```
 
@@ -82,7 +80,54 @@ python fraud_api/main.py
 
 ---
 
-## 3. Full Stack with Observability
+## 3. React Dashboard
+
+The `dashboard/` directory is a React + Vite single-page app. It provides a live UI for the Live Feed, Transaction Explorer, Risk Manager, and Model Performance pages.
+
+### Install
+
+```bash
+cd dashboard
+npm install
+```
+
+### Run
+
+**With the Python API already running** (run on seperate terminal while api is already running, recommended for full data):
+
+```bash
+npm run dev
+```
+
+Opens at **http://localhost:5173**. Connects to the API at `http://localhost:8000`.
+
+**Without the Python API** (mock data, no setup required):
+
+```bash
+npm run dev:stack
+```
+
+Starts a lightweight Node mock-API alongside the Vite dev server. Useful for frontend-only development.
+
+**Production build:**
+
+```bash
+npm run build    # outputs to dashboard/dist/
+npm run preview  # serve the production bundle locally
+```
+
+### Dashboard pages
+
+| Page | What it shows |
+|---|---|
+| Live Feed | Real-time transaction decisions as they are scored |
+| Explorer | Searchable + filterable transaction history |
+| Risk Manager | User risk tier overrides and KYC status |
+| Model Performance | Champion model metrics, version history, drift report |
+
+---
+
+## 4. Full Stack with Observability
 
 Start every service — Redis, Postgres, Prometheus, and Grafana — with one command:
 
@@ -93,6 +138,7 @@ docker-compose up
 | Service | URL | Credentials |
 |---|---|---|
 | FraudShield API | http://localhost:8000 | — |
+| React Dashboard | http://localhost:5173 | — |
 | Prometheus | http://localhost:9090 | — |
 | Grafana | http://localhost:3000 | admin / fraudshield |
 
@@ -119,7 +165,7 @@ docker-compose down -v
 
 ---
 
-## 4. Score a Transaction
+## 5. Score a Transaction
 
 ```bash
 curl -X POST http://localhost:8000/v1/transactions/score \
@@ -167,7 +213,7 @@ curl -X POST http://localhost:8000/v1/transactions/score \
 
 ---
 
-## 5. MLOps Loop — Manual
+## 6. MLOps Loop — Manual
 
 Run the loop step by step from the terminal:
 
@@ -214,7 +260,7 @@ python scripts/auto_rollback.py --dry-run
 
 ---
 
-## 6. MLOps Loop — Automated (CI)
+## 7. MLOps Loop — Automated (CI)
 
 Two GitHub Actions workflows automate the full loop:
 
@@ -247,7 +293,7 @@ Go to **Actions → Auto-Rollback Health Check → Run workflow**, set `dry_run 
 
 ---
 
-## 7. Auto-Rollback
+## 8. Auto-Rollback
 
 The auto-rollback system has two layers of protection:
 
@@ -307,7 +353,7 @@ Exit codes: `0` = healthy, `1` = fatal error, `2` = rollback triggered.
 
 ---
 
-## 8. Drift Detection
+## 9. Drift Detection
 
 FraudShield uses **Population Stability Index (PSI)** to detect feature distribution shift between a 60-day baseline window and the most recent 7 days.
 
@@ -347,7 +393,7 @@ This inserts a month of "Month 2 fraud" — known device + clean VPN IP + daytim
 
 ---
 
-## 9. Grafana Dashboard
+## 10. Grafana Dashboard
 
 Open **http://localhost:3000** → login with `admin / fraudshield` → the **FraudShield — Model Observability** dashboard loads automatically.
 
@@ -384,7 +430,7 @@ The dashboard refreshes every **10 seconds** and defaults to the **last 1 hour**
 
 ---
 
-## 10. Prometheus Metrics
+## 11. Prometheus Metrics
 
 The API exposes metrics at `/metrics` (standard Prometheus scrape format). Scraped every 15 seconds by the Prometheus container.
 
@@ -417,28 +463,35 @@ fraudshield_model_info
 
 ---
 
-## 11. Running Tests
+## 12. Running Tests
+
+### Unit + integration tests (no Redis required)
 
 ```bash
-# All tests
-pytest tests/ -v
-
-# Specific test file
+pytest tests/test_scoring.py tests/test_repository.py -v
 pytest tests/test_api.py -v
-pytest tests/test_scoring.py -v
-pytest tests/test_repository.py -v
+
+# Or everything at once
+pytest tests/ -v --tb=short
 ```
 
-Tests require the `local_store/` directory to exist. If running locally for the first time:
+### Redis integration tests
+
+These tests exercise velocity counters, the offline feature store, and the idempotency cache against a real Redis instance. They are automatically skipped when Redis is unavailable.
 
 ```bash
-mkdir -p local_store/model_registry local_store/mlruns
-pytest tests/ -v
+# Start Redis first
+docker-compose up -d redis
+# or: docker run -d -p 6379:6379 redis:7-alpine
+
+pytest tests/test_redis_features.py -v
 ```
+
+In CI these run in the `redis-integration` job which spins up a `redis:7-alpine` service container automatically.
 
 ---
 
-## 12. API Reference
+## 13. API Reference
 
 All endpoints (except `/health` and `/metrics`) require:
 
@@ -458,6 +511,7 @@ Authorization: Bearer dev_token_fraudshield_local_only
 | `POST` | `/v1/labels` | Submit a fraud label (chargeback / review) |
 | `GET` | `/v1/model/info` | Current champion model metadata |
 | `GET` | `/v1/model/versions` | All versions in the registry |
+| `POST` | `/v1/model/reload` | Hot-reload the current champion without restarting |
 | `GET` | `/v1/drift/report` | Run PSI drift report (live) |
 | `GET` | `/v1/dashboard/stats` | 24-hour scoring summary |
 
@@ -465,7 +519,7 @@ Interactive docs: **http://localhost:8000/docs**
 
 ---
 
-## 13. Architecture
+## 14. Architecture
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -516,7 +570,7 @@ Interactive docs: **http://localhost:8000/docs**
 
 ---
 
-## 14. Project Structure
+## 15. Project Structure
 
 ```
 fraudshield_mvp/
@@ -569,6 +623,17 @@ fraudshield_mvp/
 │   ├── retrain_loop.py         ← Drift → challenger → champion/challenger → promote
 │   └── auto_rollback.py        ← Post-promotion health check + rollback
 │
+├── dashboard/                  ← React + Vite single-page app
+│   ├── src/
+│   │   ├── App.jsx             ← Router + layout
+│   │   ├── pages/              ← LiveFeed, Explorer, RiskManager, ModelPerformance
+│   │   ├── components/         ← Shared UI components
+│   │   ├── hooks/              ← Custom React hooks
+│   │   ├── api/                ← API client (points to :8000)
+│   │   └── lib/                ← Utilities
+│   ├── dev-api.mjs             ← Lightweight Node mock API for frontend-only dev
+│   └── package.json            ← npm scripts: dev, dev:stack, build, preview
+│
 ├── monitoring/                 ← Observability config
 │   ├── prometheus.yml          ← Scrape config (fraud-api:8000/metrics, 15s)
 │   └── grafana/
@@ -579,7 +644,7 @@ fraudshield_mvp/
 │           └── fraudshield.json ← 12-panel Model Observability dashboard
 │
 ├── .github/workflows/
-│   ├── test.yml                ← pytest on every push/PR
+│   ├── test.yml                ← pytest + Redis integration on every push/PR
 │   ├── deploy.yml              ← Deploy gate (runs after tests)
 │   ├── retrain_loop.yml        ← Daily cron drift → retrain → promote
 │   └── auto_rollback.yml       ← Post-promotion health check → rollback
@@ -587,7 +652,8 @@ fraudshield_mvp/
 ├── tests/
 │   ├── test_api.py             ← FastAPI route tests (httpx)
 │   ├── test_scoring.py         ← Scoring strategy + rule tests
-│   └── test_repository.py      ← Repository layer tests
+│   ├── test_repository.py      ← Repository layer tests
+│   └── test_redis_features.py  ← Redis integration tests (velocity, features, idempotency)
 │
 ├── docker-compose.yml          ← Redis, Postgres, Prometheus, Grafana
 ├── requirements.txt
@@ -605,7 +671,7 @@ fraudshield_mvp/
 
 ---
 
-## 15. Production Scaling
+## 16. Production Scaling
 
 The architecture is designed so each component is a one-line swap in `fraud_api/main.py`. Business logic — `FraudService`, `FraudScorer`, all domain models — never changes.
 

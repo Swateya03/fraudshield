@@ -13,14 +13,17 @@ MVP wiring:
   (one line change each)
 """
 
+import asyncio
 import uuid
 import time
+import json
+import threading
 from datetime import datetime
 from typing import Optional
 from dataclasses import asdict
 
 from fastapi import FastAPI, Request, HTTPException, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.wsgi import WSGIMiddleware
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
@@ -29,6 +32,7 @@ from prometheus_client import make_wsgi_app
 from fraudshield_core.models import Transaction, Channel
 from fraudshield_core.config import config
 from fraudshield_core.db import create_all_tables, get_engine
+from fraudshield_core.redis_client import get_redis
 
 # ── Repository implementations ──────────────
 from fraud_api.repository.sqlite_repo import (
@@ -57,6 +61,7 @@ except Exception as e:
 
 # ── Events ───────────────────────────────────
 from fraud_api.events.publisher import InMemoryPublisher
+from fraud_api.events.sse_broadcaster import broadcaster
 from fraud_api.events.observers import (
     audit_log_observer, risk_tier_updater_observer, alert_observer
 )
@@ -110,16 +115,49 @@ app = FastAPI(
 # Expose Prometheus metrics at /metrics (standard scrape endpoint)
 app.mount("/metrics", WSGIMiddleware(make_wsgi_app()))
 
-# Idempotency store (Redis in prod, dict in MVP)
-_idempotency_store: dict = {}
-
 _model_registry = LocalFileRegistry()
+_serving_version: str = "none"  # version currently hot-loaded in scorer
 
 
 def _serialize_model_metadata(m):
     d = asdict(m)
     d["trained_at"] = m.trained_at.isoformat()
     return d
+
+
+def _load_current_champion() -> tuple:
+    """Load the current champion from registry and hot-swap the scorer. Returns (success, version_or_error)."""
+    global _serving_version
+    try:
+        new_strategy = XGBoostStrategy()
+        if not new_strategy.is_ready():
+            return False, "model file not found or failed to load"
+        scorer.set_strategy(new_strategy)
+        _, meta = _model_registry.load("current")
+        _serving_version = meta.version
+        set_model_version(meta.version, scorer.strategy_name)
+        return True, meta.version
+    except FileNotFoundError:
+        return False, "no champion in registry"
+    except Exception as e:
+        return False, str(e)
+
+
+def _poll_for_model_update() -> None:
+    """Daemon thread: every 30 s check if a new champion has been promoted."""
+    while True:
+        time.sleep(30)
+        try:
+            candidate = _model_registry._get_current_version()
+            if candidate and candidate != _serving_version:
+                print(f"  [poll] New champion detected: {candidate} (was {_serving_version})")
+                ok, msg = _load_current_champion()
+                if ok:
+                    print(f"  [poll] Hot-swapped to {msg}")
+                else:
+                    print(f"  [poll] Reload failed: {msg}")
+        except Exception as e:
+            print(f"  [poll] Check failed: {e}")
 
 
 # ─────────────────────────────────────────────
@@ -135,6 +173,7 @@ class ScoreRequest(BaseModel):
     channel:          str   = Field(...)
     device_id:        Optional[str] = None
     ip_address:       Optional[str] = None
+    dry_run:          bool          = False
 
     @field_validator("currency")
     @classmethod
@@ -201,13 +240,15 @@ def _authenticate(authorization: Optional[str]) -> None:
 
 @app.on_event("startup")
 async def startup():
+    global _serving_version
     create_all_tables()
-    # Publish which model + strategy is currently serving
     try:
         _, meta = _model_registry.load("current")
         set_model_version(meta.version, scorer.strategy_name)
+        _serving_version = meta.version
     except FileNotFoundError:
         set_model_version("none", scorer.strategy_name)
+    threading.Thread(target=_poll_for_model_update, daemon=True, name="model-poller").start()
     print("[OK] FraudShield API started")
     print(f"  Strategy: {scorer.strategy_name}")
     print(f"  Metrics:  http://localhost:{config.API_PORT}/metrics")
@@ -250,6 +291,21 @@ async def model_info(
     return _serialize_model_metadata(champion)
 
 
+@app.post("/v1/model/reload")
+async def reload_model(
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
+    """Force-reload the current champion from the registry without restarting the process."""
+    _authenticate(authorization)
+    ok, msg = _load_current_champion()
+    if not ok:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": {"code": "RELOAD_FAILED", "message": msg}},
+        )
+    return {"reloaded": True, "version": msg, "strategy": scorer.strategy_name}
+
+
 @app.post("/v1/transactions/score", response_model=ScoreResponse)
 async def score_transaction(
     body:             ScoreRequest,
@@ -270,12 +326,16 @@ async def score_transaction(
     _authenticate(authorization)
 
     # Idempotency — return cached result if key seen before
-    if idempotency_key and idempotency_key in _idempotency_store:
-        cached = _idempotency_store[idempotency_key]
-        return JSONResponse(
-            content=cached,
-            headers={"X-Idempotent-Replay": "true"}
-        )
+    if idempotency_key:
+        try:
+            cached = get_redis().get(f"idempotency:{idempotency_key}")
+            if cached:
+                return JSONResponse(
+                    content=json.loads(cached),
+                    headers={"X-Idempotent-Replay": "true"},
+                )
+        except Exception:
+            pass  # Redis unavailable — proceed without idempotency check
 
     # Build Transaction domain object
     txn = Transaction(
@@ -291,7 +351,7 @@ async def score_transaction(
     )
 
     # Score
-    fraud_score = service.process(txn)
+    fraud_score = service.process(txn, dry_run=body.dry_run)
 
     # Build response
     response = {
@@ -304,9 +364,34 @@ async def score_transaction(
         "request_id":        request_id,
     }
 
-    # Cache for idempotency
-    if idempotency_key:
-        _idempotency_store[idempotency_key] = response
+    # Cache for idempotency (skip for dry-run — nothing was persisted)
+    if idempotency_key and not body.dry_run:
+        try:
+            get_redis().setex(
+                f"idempotency:{idempotency_key}",
+                config.REDIS_TTL_IDEMPOTENCY,
+                json.dumps(response),
+            )
+        except Exception:
+            pass  # Redis unavailable — score already returned, continue
+
+    # Push to SSE stream (skip dry-run — nothing was persisted)
+    if not body.dry_run:
+        broadcaster.broadcast({
+            "transaction_id":    txn.id,
+            "user_id":           txn.user_id,
+            "merchant_id":       txn.merchant_id,
+            "amount":            txn.amount,
+            "currency":          txn.currency,
+            "channel":           txn.channel.value,
+            "ip_address":        txn.ip_address,
+            "fraud_probability": fraud_score.score,
+            "decision":          fraud_score.decision.value,
+            "reason_codes":      fraud_score.reason_codes,
+            "model_version":     fraud_score.model_version,
+            "latency_ms":        fraud_score.latency_ms,
+            "scored_at":         fraud_score.scored_at.isoformat(),
+        })
 
     # Emit Prometheus metrics
     record_score(
@@ -333,42 +418,39 @@ async def list_transactions(
 ):
     """List recently scored transactions (for Live Feed & Explorer)."""
     _authenticate(authorization)
-    from sqlalchemy import select, text as sa_text
-    eng = get_engine()
-    direction = "DESC" if order == "desc" else "ASC"
-    clauses, params = [], {"lim": min(limit, 500)}
+    from sqlalchemy import select, asc, desc
+    from fraudshield_core.db import transactions_table as t, fraud_scores_table as fs
+
+    stmt = (
+        select(
+            t.c.id.label("transaction_id"),
+            t.c.user_id,
+            t.c.merchant_id,
+            t.c.amount,
+            t.c.currency,
+            t.c.channel,
+            t.c.ip_address,
+            fs.c.score.label("fraud_probability"),
+            fs.c.decision,
+            fs.c.reason_codes,
+            fs.c.strategy_used,
+            fs.c.model_version,
+            fs.c.latency_ms,
+            fs.c.scored_at,
+        )
+        .select_from(fs.join(t, t.c.id == fs.c.transaction_id))
+    )
 
     if user_id:
-        clauses.append("t.user_id = :uid")
-        params["uid"] = user_id
+        stmt = stmt.where(t.c.user_id == user_id)
     if decision:
-        clauses.append("fs.decision = :dec")
-        params["dec"] = decision
+        stmt = stmt.where(fs.c.decision == decision)
 
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    sql = sa_text(f"""
-        SELECT
-            t.id             AS transaction_id,
-            t.user_id,
-            t.merchant_id,
-            t.amount,
-            t.channel,
-            t.ip_address,
-            fs.score         AS fraud_probability,
-            fs.decision,
-            fs.reason_codes,
-            fs.strategy_used,
-            fs.model_version,
-            fs.latency_ms,
-            fs.scored_at
-        FROM fraud_scores fs
-        JOIN transactions t ON t.id = fs.transaction_id
-        {where}
-        ORDER BY fs.scored_at {direction}
-        LIMIT :lim
-    """)
-    with eng.connect() as conn:
-        rows = conn.execute(sql, params).fetchall()
+    stmt = stmt.order_by(desc(fs.c.scored_at) if order == "desc" else asc(fs.c.scored_at))
+    stmt = stmt.limit(min(limit, 500))
+
+    with get_engine().connect() as conn:
+        rows = conn.execute(stmt).fetchall()
 
     import json as _json
     items = []
@@ -405,6 +487,41 @@ async def dashboard_stats(
     if not row:
         return {"total_24h": 0, "blocked_24h": 0, "review_24h": 0, "allowed_24h": 0}
     return dict(row._mapping)
+
+
+@app.get("/v1/stream")
+async def stream_transactions(token: Optional[str] = None):
+    """
+    Server-Sent Events stream — one event per scored transaction.
+    Auth via ?token= query param (EventSource cannot set headers).
+    """
+    if not token or token != config.API_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    async def generator():
+        q = broadcaster.subscribe()
+        try:
+            yield ": connected\n\n"          # immediate ack so browser knows it's live
+            while True:
+                try:
+                    data = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"  # prevent proxy / browser 30s timeout
+        except asyncio.CancelledError:
+            pass
+        finally:
+            broadcaster.unsubscribe(q)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":    "no-cache",
+            "Connection":       "keep-alive",
+            "X-Accel-Buffering": "no",      # disable nginx buffering if behind a proxy
+        },
+    )
 
 
 @app.get("/v1/transactions/{transaction_id}")

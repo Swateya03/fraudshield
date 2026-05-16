@@ -16,23 +16,12 @@ import math
 from datetime import datetime
 from typing import Optional
 
-from fraudshield_core.models import Transaction, User, Merchant, Device, FeatureVector
+from fraudshield_core.models import Transaction, User, Merchant, Device, FeatureVector, CHANNEL_RISK
 from fraudshield_core.redis_client import get_redis
 from fraudshield_core.config import config
 
 
-# Known Tor exit nodes / fraud IPs (in production: a Redis SET updated daily)
-_KNOWN_FRAUD_IPS = {
-    "185.220.101.5",
-    "185.220.101.6",
-    "192.42.116.16",
-    "199.87.154.255",
-    "23.129.64.131",
-}
-
-# High-risk merchant categories (in production: in DB/config)
-_HIGH_RISK_CATEGORIES = {"crypto", "gift_cards", "gambling", "wire_transfer"}
-_MEDIUM_RISK_CATEGORIES = {"jewelry", "electronics", "luxury"}
+# All signal lists are defined once in config and overridable via env vars.
 
 
 class FeatureBuilder:
@@ -91,18 +80,15 @@ class FeatureBuilder:
         # ── IP features ────────────────────────────────────────────
         if txn.ip_address:
             # In production: Redis SET lookup + MaxMind GeoIP
-            fv.ip_fraud_history = 1.0 if txn.ip_address in _KNOWN_FRAUD_IPS else 0.0
+            fv.ip_fraud_history = 1.0 if txn.ip_address in config.FRAUD_IP_LIST else 0.0
         else:
             fv.ip_fraud_history = 0.5  # missing IP = slightly suspicious
 
         # ── Merchant features ──────────────────────────────────────────────
         # Check merchant_id directly — matches how dataset.py computed it in training
-        _HIGH_RISK_IDS   = {"m_crypto", "m_giftcard", "m_jewelry", "m_luxury"}
-        _MEDIUM_RISK_IDS = {"m_bestbuy", "m_electronics"}
-
-        if txn.merchant_id in _HIGH_RISK_IDS:
+        if txn.merchant_id in config.HIGH_RISK_MERCHANT_IDS:
             fv.merchant_risk_score = 1.0
-        elif merchant and merchant.category.lower() in _MEDIUM_RISK_CATEGORIES:
+        elif merchant and merchant.category.lower() in config.MEDIUM_RISK_MERCHANT_CATEGORIES:
             fv.merchant_risk_score = 0.5
         elif merchant:
             fv.merchant_risk_score = 0.1
@@ -118,20 +104,24 @@ class FeatureBuilder:
         fv.user_age_days = (datetime.utcnow() - user.created_at).days
         fv.is_new_user   = 1 if fv.user_age_days < 30 else 0
 
+        # ── Currency normalisation → convert to INR for all amount features ──
+        fx_rate = config.EXCHANGE_RATES_TO_INR.get(txn.currency, 1.0)
+        amount_inr = txn.amount * fx_rate
+
         # ── Derived features ───────────────────────────────────────
-        fv.amount_ratio = (txn.amount / max(fv.user_avg_amount, 1.0))
+        fv.amount_ratio = (amount_inr / max(fv.user_avg_amount, 1.0))
 
         # ── amount_zscore & geo_mismatch ──────────────────────────
         std_amount = offline.get("std_amount", 1.0) or 1.0
-        fv.amount_zscore = (txn.amount - fv.user_avg_amount) / max(std_amount, 1.0)
+        fv.amount_zscore = (amount_inr - fv.user_avg_amount) / max(std_amount, 1.0)
 
         user_city = (offline.get("user_city") or "").lower()
         merchant_city = (merchant.city or "").lower() if merchant else ""
         fv.geo_mismatch = 1 if (user_city and merchant_city and user_city != merchant_city) else 0
 
         # ── Day 5 features ───────────────────────────────────────
-        fv.log_amount = math.log1p(txn.amount)
-        fv.is_round_amount = 1 if (txn.amount == int(txn.amount) and txn.amount % 100 == 0) else 0
+        fv.log_amount = math.log1p(amount_inr)
+        fv.is_round_amount = 1 if (amount_inr == int(amount_inr) and amount_inr % 100 == 0) else 0
         fv.is_weekend = 1 if txn.created_at.weekday() >= 5 else 0
 
         if merchant and merchant.registered_at:
@@ -140,6 +130,9 @@ class FeatureBuilder:
         if user and user.updated_at:
             hours_since = (txn.created_at - user.updated_at).total_seconds() / 3600.0
             fv.hours_since_profile_update = max(hours_since, 0.0)
+
+        # ── Channel risk ──────────────────────────────────────────
+        fv.channel_risk = CHANNEL_RISK.get(txn.channel.value, 0.5)
 
         # ── Day 6: time_since_last_txn ────────────────────────────
         last_txn_time_str = offline.get("last_txn_time")
@@ -170,9 +163,14 @@ class FeatureBuilder:
             return self._velocity_db_fallback(user_id, window)
 
     def _velocity_db_fallback(self, user_id: str, window: str) -> float:
-        if self._txn_repo and window == "1h":
-            return float(self._txn_repo.get_velocity(user_id, 1))
-        return 0.0
+        if not self._txn_repo:
+            return 0.0
+        window_hours = {"1h": 1, "6h": 6, "24h": 24}
+        hours = window_hours.get(window, 1)
+        try:
+            return float(self._txn_repo.get_velocity(user_id, hours))
+        except Exception:
+            return 0.0
 
     def _increment_velocity(self, user_id: str) -> None:
         """Increment velocity counters. TTL auto-expires the window."""
@@ -191,14 +189,18 @@ class FeatureBuilder:
         """
         Read batch-computed features from Redis hash.
         Set by pipeline-service/features/precompute.py daily.
+        Returns empty dict on failure — callers must supply .get() defaults.
         """
         if not self._redis_alive:
+            print(f"  [FeatureBuilder] Redis down — offline features degraded to defaults for {user_id}")
             return {}
         key = f"features:offline:{user_id}"
         try:
             raw = self._redis.get(key)
             if raw:
                 return json.loads(raw)
-        except Exception:
+            return {}
+        except Exception as ex:
             self._redis_alive = False
-        return {}
+            print(f"  [FeatureBuilder] Redis offline feature fetch failed: {ex} — degrading to defaults")
+            return {}

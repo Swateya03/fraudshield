@@ -54,7 +54,8 @@ class InMemoryPublisher(EventPublisher):
             try:
                 handler(event)
             except Exception as ex:
-                print(f"  [Publisher] Observer failed: {ex}")
+                name = getattr(handler, "__name__", repr(handler))
+                print(f"  [Publisher] Observer '{name}' failed: {ex}")
 
     @property
     def all_events(self) -> List[FraudEvent]:
@@ -81,14 +82,17 @@ class RedisStreamsPublisher(EventPublisher):
 
     def publish(self, event: FraudEvent) -> None:
         import json
-        self._redis.xadd(self._stream, {
-            "transaction_id":  event.transaction_id,
-            "user_id":         event.user_id,
-            "amount":          str(event.amount),
-            "score":           str(event.score),
-            "decision":        event.decision.value,
-            "reason_codes":    json.dumps(event.reason_codes),
-            "model_version":   event.model_version,
-            "latency_ms":      str(event.latency_ms),
-            "scored_at":       event.scored_at.isoformat(),
-        })
+        try:
+            self._redis.xadd(self._stream, {
+                "transaction_id":  event.transaction_id,
+                "user_id":         event.user_id,
+                "amount":          str(event.amount),
+                "score":           str(event.score),
+                "decision":        event.decision.value,
+                "reason_codes":    json.dumps(event.reason_codes),
+                "model_version":   event.model_version,
+                "latency_ms":      str(event.latency_ms),
+                "scored_at":       event.scored_at.isoformat(),
+            })
+        except Exception as ex:
+            print(f"  [RedisStreamsPublisher] Failed to publish to stream '{self._stream}': {ex}")

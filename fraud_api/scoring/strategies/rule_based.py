@@ -65,6 +65,11 @@ class RuleBasedStrategy(ScoringStrategy):
             score += 0.10
             codes.append({"code": "new_merchant", "contribution": 0.10})
 
+        if features.channel_risk >= 0.6:
+            contribution = round(features.channel_risk * 0.15, 4)
+            score += contribution
+            codes.append({"code": "high_risk_channel", "contribution": contribution})
+
         return {
             "score":        round(min(score, 1.0), 4),
             "reason_codes": codes,

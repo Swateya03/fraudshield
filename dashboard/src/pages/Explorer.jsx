@@ -32,7 +32,7 @@ function TxnRow({ txn, onSelect, selected }) {
       <td className="tcell font-mono text-xs text-slate-300">{txn.transaction_id}</td>
       <td className="tcell font-mono text-xs text-slate-400">{shortId(txn.user_id)}</td>
       <td className="tcell text-xs text-slate-400">{txn.merchant_id}</td>
-      <td className="tcell font-mono text-xs text-right text-slate-200">{fmtAmount(txn.amount)}</td>
+      <td className="tcell font-mono text-xs text-right text-slate-200">{fmtAmount(txn.amount, txn.currency)}</td>
       <td className="tcell">
         <span className="font-mono text-xs" style={{ color: scoreColor(txn.fraud_probability) }}>
           {txn.fraud_probability?.toFixed(4)}
@@ -166,7 +166,7 @@ export default function Explorer() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <div className="text-xs text-slate-500">Amount</div>
-                  <div className="font-mono text-slate-200">{fmtAmount(selected.amount)}</div>
+                  <div className="font-mono text-slate-200">{fmtAmount(selected.amount, selected.currency)}</div>
                 </div>
                 <div>
                   <div className="text-xs text-slate-500">Score</div>

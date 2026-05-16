@@ -30,6 +30,12 @@ def _resolve_sqlite_url(url: str) -> str:
     return f"sqlite:///{(_PROJECT_ROOT / path_part).as_posix()}"
 
 
+def _parse_set(env_name: str, default: str) -> frozenset:
+    """Parse a comma-separated env var into a frozenset of stripped strings."""
+    raw = os.getenv(env_name, default)
+    return frozenset(v.strip() for v in raw.split(",") if v.strip())
+
+
 def _resolve_data_path(p: str) -> str:
     """Anchor relative paths to project root; leave http(s) and absolute paths unchanged."""
     p = p.strip()
@@ -70,6 +76,36 @@ class Config:
 
     # ── Training ───────────────────────────────
     USE_PU_LEARNING: bool  = os.getenv("USE_PU_LEARNING", "false").lower() == "true"
+
+    # ── Fraud Signal Lists ────────────────────
+    FRAUD_IP_LIST: frozenset = _parse_set(
+        "FRAUD_IP_LIST",
+        "185.220.101.5,185.220.101.6,192.42.116.16,199.87.154.255,23.129.64.131",
+    )
+    HIGH_RISK_MERCHANT_IDS: frozenset = _parse_set(
+        "HIGH_RISK_MERCHANT_IDS",
+        "m_crypto,m_giftcard,m_jewelry,m_luxury",
+    )
+    MEDIUM_RISK_MERCHANT_IDS: frozenset = _parse_set(
+        "MEDIUM_RISK_MERCHANT_IDS",
+        "m_bestbuy,m_electronics",
+    )
+    HIGH_RISK_MERCHANT_CATEGORIES: frozenset = _parse_set(
+        "HIGH_RISK_MERCHANT_CATEGORIES",
+        "crypto,gift_cards,gambling,wire_transfer",
+    )
+    MEDIUM_RISK_MERCHANT_CATEGORIES: frozenset = _parse_set(
+        "MEDIUM_RISK_MERCHANT_CATEGORIES",
+        "jewelry,electronics,luxury",
+    )
+
+    # ── Currency normalisation (all amounts converted to INR before feature computation) ──
+    EXCHANGE_RATES_TO_INR: dict = {
+        "INR": float(os.getenv("FX_INR", "1.0")),
+        "USD": float(os.getenv("FX_USD", "83.0")),
+        "EUR": float(os.getenv("FX_EUR", "90.0")),
+        "GBP": float(os.getenv("FX_GBP", "105.0")),
+    }
 
     # ── Drift Detection ───────────────────────
     PSI_THRESHOLD: float       = float(os.getenv("PSI_THRESHOLD", "0.20"))

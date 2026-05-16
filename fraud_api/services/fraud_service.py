@@ -66,8 +66,9 @@ class FraudService:
         self.merchant_repo    = merchant_repo
 
     def process(self, txn: Transaction,
-                merchant: Optional[Merchant] = None,
-                device:   Optional[Device]   = None) -> FraudScore:
+                merchant:  Optional[Merchant] = None,
+                device:    Optional[Device]   = None,
+                dry_run:   bool               = False) -> FraudScore:
         """
         Score a transaction end-to-end.
         Returns FraudScore with decision and explanation.
@@ -75,7 +76,8 @@ class FraudService:
         start_ms = time.time() * 1000
 
         # ── Step 1: Save transaction ────────────────────────────
-        self.txn_repo.save(txn)
+        if not dry_run:
+            self.txn_repo.save(txn)
 
         # ── Step 2: Fetch user ──────────────────────────────────
         user = self.user_repo.get_by_id(txn.user_id)
@@ -85,7 +87,7 @@ class FraudService:
         # ── Step 3: Short-circuit if blocked ────────────────────
         # Slide 73 Seq 2: blocked user path
         if user.is_blocked():
-            return self._blocked_result(txn, start_ms)
+            return self._blocked_result(txn, start_ms, dry_run=dry_run)
 
         # ── Step 3b: Look up merchant ─────────────────────────────
         if merchant is None and self.merchant_repo:
@@ -119,9 +121,13 @@ class FraudService:
         )
 
         # ── Step 7: Save score ───────────────────────────────────
-        self.score_repo.save(fraud_score)
+        if not dry_run:
+            self.score_repo.save(fraud_score)
 
         # ── Step 8: Publish event ────────────────────────────────
+        if dry_run:
+            return fraud_score
+
         event = FraudEvent(
             transaction_id = txn.id,
             user_id        = txn.user_id,
@@ -134,7 +140,11 @@ class FraudService:
             latency_ms     = latency_ms,
             scored_at      = fraud_score.scored_at,
         )
-        self.publisher.publish(event)
+        try:
+            self.publisher.publish(event)
+        except Exception as ex:
+            # Score is already committed — log and continue rather than surfacing a 500
+            print(f"  [FraudService] Event publish failed, score preserved: {ex}")
 
         return fraud_score
 
@@ -147,7 +157,7 @@ class FraudService:
             created_at=datetime.utcnow(), updated_at=datetime.utcnow()
         )
 
-    def _blocked_result(self, txn: Transaction, start_ms: float) -> FraudScore:
+    def _blocked_result(self, txn: Transaction, start_ms: float, dry_run: bool = False) -> FraudScore:
         """Short-circuit for explicitly blocked users."""
         latency_ms  = int(time.time() * 1000 - start_ms)
         fraud_score = FraudScore(
@@ -161,5 +171,22 @@ class FraudService:
             latency_ms     = latency_ms,
             scored_at      = datetime.utcnow(),
         )
-        self.score_repo.save(fraud_score)
+        if not dry_run:
+            self.score_repo.save(fraud_score)
+            event = FraudEvent(
+                transaction_id = txn.id,
+                user_id        = txn.user_id,
+                merchant_id    = txn.merchant_id,
+                amount         = txn.amount,
+                score          = fraud_score.score,
+                decision       = fraud_score.decision,
+                reason_codes   = fraud_score.reason_codes,
+                model_version  = fraud_score.model_version,
+                latency_ms     = latency_ms,
+                scored_at      = fraud_score.scored_at,
+            )
+            try:
+                self.publisher.publish(event)
+            except Exception as ex:
+                print(f"  [FraudService] Event publish failed (blocked), score preserved: {ex}")
         return fraud_score

@@ -61,34 +61,40 @@ def _compute_features(df: pd.DataFrame) -> pd.DataFrame:
     device_first = pd.to_datetime(df["device_first_seen"])
     df["device_age_days"] = (df["_ts"] - device_first).dt.days
 
+    # ── Currency normalisation → INR equivalent for all amount features ──
+    from fraudshield_core.config import config as _cfg
+    if "currency" in df.columns:
+        df["_amount_inr"] = df.apply(
+            lambda r: r["amount"] * _cfg.EXCHANGE_RATES_TO_INR.get(r["currency"], 1.0), axis=1
+        )
+    else:
+        df["_amount_inr"] = df["amount"]  # training data pre-dates currency column → all INR
+
     # ── Derived features ───────────────────────────────────────
     avg_hist = df["user_avg_amount_historical"].fillna(500).clip(lower=1)
     std_hist = df["user_std_historical"].fillna(1).clip(lower=1)
 
-    df["amount_ratio"]       = df["amount"] / avg_hist
+    df["amount_ratio"]       = df["_amount_inr"] / avg_hist
     df["is_new_device"]      = ((df["device_age_days"].isna()) | (df["device_age_days"] < 1)).astype(int)
     df["device_trust_score"] = (df["device_age_days"].fillna(0) / 30).clip(upper=1.0)
     df["is_late_night"]      = (df["_ts"].dt.hour < 5).astype(int)
     df["hour_of_day"]        = df["_ts"].dt.hour
     df["day_of_week"]        = df["_ts"].dt.dayofweek
-    df["ip_fraud_history"]   = df["ip_address"].isin([
-        "185.220.101.5", "185.220.101.6", "192.42.116.16",
-        "199.87.154.255", "23.129.64.131",
-    ]).astype(float)
+    df["ip_fraud_history"]   = df["ip_address"].isin(_cfg.FRAUD_IP_LIST).astype(float)
     df["merchant_risk_score"] = df["merchant_id"].apply(
-        lambda x: 1.0 if x in ("m_crypto", "m_giftcard", "m_jewelry", "m_luxury") else 0.1
+        lambda x: 1.0 if x in _cfg.HIGH_RISK_MERCHANT_IDS else 0.1
     )
     df["is_new_user"]       = 0
 
     # ── amount_zscore & geo_mismatch ──────────────────────────
-    df["amount_zscore"] = (df["amount"] - avg_hist) / std_hist
+    df["amount_zscore"] = (df["_amount_inr"] - avg_hist) / std_hist
     df["geo_mismatch"]  = (
         df["user_city"].fillna("").str.lower() != df["merchant_city"].fillna("").str.lower()
     ).astype(int)
 
     # ── Day 5 features ────────────────────────────────────────
-    df["log_amount"]       = df["amount"].apply(lambda x: math.log1p(x))
-    df["is_round_amount"]  = df["amount"].apply(lambda x: int(x == int(x) and x % 100 == 0))
+    df["log_amount"]       = df["_amount_inr"].apply(lambda x: math.log1p(x))
+    df["is_round_amount"]  = df["_amount_inr"].apply(lambda x: int(x == int(x) and x % 100 == 0))
     df["is_weekend"]       = (df["_ts"].dt.dayofweek >= 5).astype(int)
 
     user_updated = pd.to_datetime(df["user_updated_at"])
@@ -105,6 +111,10 @@ def _compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df["time_since_last_txn_secs"] = (
         (df["_ts"] - df["_prev_ts"]).dt.total_seconds().fillna(86400.0)
     )
+
+    # ── Channel risk ───────────────────────────────────────────
+    from fraudshield_core.models import CHANNEL_RISK
+    df["channel_risk"] = df["channel"].map(CHANNEL_RISK).fillna(0.5)
 
     return df
 

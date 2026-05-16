@@ -1,5 +1,5 @@
 {
   "python.analysis.extraPaths": ["${workspaceFolder}"],
   "python.testing.pytestEnabled": true,
-  "claudeCode.useTerminal": true
+  "python.testing.pytestArgs": ["tests"]
 }

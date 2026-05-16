@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import {
   Activity, Search, Zap, Users, BarChart2,
-  TrendingUp, Key, Shield, Circle,
+  TrendingUp, Shield, Circle,
 } from 'lucide-react'
 import { usePolling } from '../hooks/usePolling'
 import { getHealth }  from '../api/client'
@@ -13,7 +13,6 @@ const NAV = [
   { to: '/users',     icon: Users,      label: 'Risk Manager'     },
   { to: '/model',     icon: BarChart2,  label: 'Model Performance'},
   { to: '/drift',     icon: TrendingUp, label: 'Drift Monitor'    },
-  { to: '/keys',      icon: Key,        label: 'API Keys'         },
 ]
 
 export default function Layout() {

@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires      = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fraudshield"
-version = "0.1.0"
-description = "Real-time CNP fraud detection MVP"
+name        = "fraudshield"
+version     = "1.1.0"
+description = "Real-time CNP fraud detection API"
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
 
@@ -15,11 +15,65 @@ dependencies = { file = ["requirements.txt"] }
 [tool.setuptools.packages.find]
 include = ["fraudshield_core*", "fraud_api*", "ml_pipeline*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+# ── Ruff ──────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length    = 100
+target-version = "py311"
+src            = ["fraud_api", "fraudshield_core", "ml_pipeline", "tests"]
 
-# Pylance / Pyright: resolve top-level packages from repo root (same layout as editable install)
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "S", "RUF"]
+ignore = [
+    "S101",  # assert ok in tests
+    "S105", "S106",  # hardcoded-password false positives in config defaults
+    "B008",  # function call in default arg — FastAPI pattern
+    "E501",  # line length handled by ruff-format
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*"   = ["S", "B"]
+"scripts/*" = ["S603", "S607"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fraud_api", "fraudshield_core", "ml_pipeline"]
+
+# ── Mypy ──────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version         = "3.11"
+ignore_missing_imports = true
+no_strict_optional     = true
+warn_unused_ignores    = true
+warn_redundant_casts   = true
+exclude                = ["alembic/", "local_store/"]
+
+[[tool.mypy.overrides]]
+module = ["xgboost.*", "shap.*", "mlflow.*", "evidently.*", "pandera.*", "locust.*"]
+ignore_missing_imports = true
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths    = ["tests"]
+asyncio_mode = "auto"
+addopts      = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["fraud_api", "fraudshield_core"]
+omit   = ["*/tests/*", "alembic/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+# ── Pylance / Pyright ─────────────────────────────────────────────────────────
 [tool.pyright]
-pythonVersion = "3.11"
-extraPaths = ["."]
+pythonVersion    = "3.11"
+extraPaths       = ["."]
 typeCheckingMode = "basic"

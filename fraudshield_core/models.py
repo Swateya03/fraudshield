@@ -240,7 +240,7 @@ class FeatureVector:
             else:
                 sanitized.append(val)
         if bad:
-            print(f"  [FeatureVector] Sanitized non-finite values → 0.0 for: {bad}")
+            print(f"  [FeatureVector] Sanitized non-finite values -> 0.0 for: {bad}")
         return sanitized
 
     FEATURE_NAMES = [
@@ -271,6 +271,7 @@ class FraudScore:
     strategy_used:   str
     latency_ms:      int
     scored_at:       datetime
+    ab_variant:      str = "champion"
 
 
 @dataclass

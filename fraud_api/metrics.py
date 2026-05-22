@@ -30,6 +30,14 @@ SCORE_HISTOGRAM = Histogram(
     buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
 )
 
+# Labelled by ab_variant — allows Grafana to overlay champion vs challenger distributions
+SCORE_BY_VARIANT = Histogram(
+    "fraudshield_score_by_variant",
+    "Fraud score distribution split by A/B variant",
+    ["ab_variant"],
+    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+)
+
 # ── Latency ───────────────────────────────────────────────────────────────────
 SCORING_LATENCY = Histogram(
     "fraudshield_scoring_latency_seconds",
@@ -50,11 +58,19 @@ MODEL_INFO = Gauge(
     ["version", "strategy"],
 )
 
+ROLLBACK_TARGET = Gauge(
+    "fraudshield_rollback_target",
+    "Previous champion version available for rollback (value is always 1, use label)",
+    ["version", "strategy"],
+)
 
-def record_score(decision: str, strategy: str, score: float, latency_ms: int) -> None:
+
+def record_score(decision: str, strategy: str, score: float, latency_ms: int,
+                 ab_variant: str = "champion") -> None:
     """Single call to update all metrics for one scored transaction."""
     DECISIONS.labels(decision=decision, strategy=strategy).inc()
     SCORE_HISTOGRAM.observe(score)
+    SCORE_BY_VARIANT.labels(ab_variant=ab_variant).observe(score)
     SCORING_LATENCY.observe(latency_ms / 1000.0)
     if latency_ms > 200:
         SLA_BREACHES.inc()
@@ -63,3 +79,28 @@ def record_score(decision: str, strategy: str, score: float, latency_ms: int) ->
 def set_model_version(version: str, strategy: str) -> None:
     """Call once at startup and after each champion promotion."""
     MODEL_INFO.labels(version=version, strategy=strategy).set(1)
+
+
+def set_rollback_target(version: str, strategy: str) -> None:
+    """Set the previous champion version as the rollback target."""
+    ROLLBACK_TARGET.labels(version=version, strategy=strategy).set(1)
+
+
+# ── PSI drift scores ───────────────────���──────────────────────��───────────────
+PSI_GAUGE = Gauge(
+    "fraudshield_psi_score",
+    "Population Stability Index per feature (updated by drift monitor)",
+    ["feature"],
+)
+
+
+def update_psi_metrics(psi_by_feature: dict) -> None:
+    """
+    Push PSI values into Prometheus after a drift check run.
+    Called by the drift monitor and by POST /v1/model/drift.
+
+    psi_by_feature: {"amount_log": 0.04, "velocity_1h": 0.23, ...}
+    """
+    for feature, value in psi_by_feature.items():
+        if value is not None:
+            PSI_GAUGE.labels(feature=feature).set(float(value))

@@ -20,7 +20,7 @@ def audit_log_observer(event: FraudEvent) -> None:
     print(
         f"  [AUDIT] {event.scored_at.strftime('%H:%M:%S')} | "
         f"{event.transaction_id} | "
-        f"₹{event.amount:,.0f} | "
+        f"INR {event.amount:,.0f} | "
         f"score={event.score:.2f} | "
         f"{event.decision.value.upper()}"
     )
@@ -48,8 +48,8 @@ def alert_observer(event: FraudEvent) -> None:
     """
     if event.score >= 0.90 and event.decision == Decision.BLOCK:
         print(
-            f"  [ALERT] 🚨 HIGH CONFIDENCE FRAUD | "
+            f"  [ALERT] HIGH CONFIDENCE FRAUD | "
             f"User: {event.user_id} | "
-            f"Amount: ₹{event.amount:,.0f} | "
+            f"Amount: INR {event.amount:,.0f} | "
             f"Score: {event.score:.2f}"
         )

@@ -1,11 +1,12 @@
-import { BarChart2, TrendingUp, Award } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { BarChart2, TrendingUp, Award, ArrowUpCircle, CheckCircle, AlertTriangle } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, RadarChart, PolarGrid,
   PolarAngleAxis, Radar, Legend,
 } from 'recharts'
 import { usePolling }    from '../hooks/usePolling'
-import { getModelVersions, getModelInfo } from '../api/client'
+import { getModelVersions, getModelInfo, promoteModel, getABRouting, setABRouting } from '../api/client'
 
 function MetricGauge({ label, value, color }) {
   const pct = value * 100
@@ -47,8 +48,67 @@ const CustomTooltip = ({ active, payload, label }) => {
 }
 
 export default function ModelPerformance() {
-  const { data: versions, loading: vLoading } = usePolling(getModelVersions, 30000)
+  const { data: versions, loading: vLoading, refetch: refreshVersions } = usePolling(getModelVersions, 30000)
   const { data: current,  loading: cLoading } = usePolling(getModelInfo, 30000)
+
+  const [promoting,     setPromoting]     = useState(null)
+  const [promoteOk,     setPromoteOk]     = useState(null)
+  const [promoteError,  setPromoteError]  = useState(null)
+
+  const [abChallenger,  setAbChallenger]  = useState('')
+  const [abTrafficPct,  setAbTrafficPct]  = useState(30)
+  const [abEnabled,     setAbEnabled]     = useState(false)
+  const [abBusy,        setAbBusy]        = useState(false)
+  const [abMsg,         setAbMsg]         = useState(null)
+
+  // Restore A/B state from API on mount so navigation doesn't lose it
+  useEffect(() => {
+    getABRouting().then(state => {
+      if (state.ab_enabled && state.challenger_version) {
+        setAbEnabled(true)
+        setAbChallenger(state.challenger_version)
+        setAbTrafficPct(Math.round((state.traffic_pct ?? 0.3) * 100))
+      }
+    }).catch(() => {})
+  }, [])
+
+  async function handleABToggle() {
+    setAbBusy(true); setAbMsg(null)
+    try {
+      if (abEnabled) {
+        await setABRouting(null, 0)
+        setAbEnabled(false)
+        setAbMsg({ ok: true, text: 'A/B routing disabled — 100% traffic to champion' })
+      } else {
+        if (!abChallenger) return
+        await setABRouting(abChallenger, abTrafficPct / 100)
+        setAbEnabled(true)
+        setAbMsg({ ok: true, text: `${abTrafficPct}% traffic → ${abChallenger}` })
+      }
+      setTimeout(() => setAbMsg(null), 4000)
+    } catch (e) {
+      setAbMsg({ ok: false, text: e.message })
+    } finally {
+      setAbBusy(false)
+    }
+  }
+
+  async function handlePromote(version) {
+    if (version === champion?.version) return
+    setPromoting(version)
+    setPromoteError(null)
+    setPromoteOk(null)
+    try {
+      await promoteModel(version)
+      setPromoteOk(version)
+      setTimeout(() => setPromoteOk(null), 4000)
+      if (refreshVersions) refreshVersions()
+    } catch (e) {
+      setPromoteError(e.message)
+    } finally {
+      setPromoting(null)
+    }
+  }
 
   const versionList = Array.isArray(versions) ? versions : (versions?.versions || [])
   const champion    = versionList.find(v => v.is_champion) || current
@@ -86,19 +146,43 @@ export default function ModelPerformance() {
 
       {champion && (
         <>
-          {/* Champion banner */}
-          <div className="panel border-allow/30 border bg-allow-dim/20 flex items-center gap-3">
-            <Award size={18} className="text-allow-text flex-shrink-0" />
-            <div>
-              <div className="text-sm font-medium text-allow-text">
-                Champion: {champion.version}
-              </div>
-              <div className="text-xs text-slate-500 mt-0.5">
-                Trained on {champion.training_rows?.toLocaleString()} rows ·
-                {' '}Threshold: {champion.threshold} ·
-                {' '}Fraud rate: {((champion.fraud_rate || 0)*100).toFixed(1)}%
+          {/* Champion banner + model selector */}
+          <div className="panel border-allow/30 border bg-allow-dim/20 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Award size={18} className="text-allow-text flex-shrink-0" />
+              <div>
+                <div className="text-sm font-medium text-allow-text">
+                  Champion: {champion.version}
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Trained on {champion.training_rows?.toLocaleString()} rows ·
+                  {' '}Threshold: {champion.threshold} ·
+                  {' '}Fraud rate: {((champion.fraud_rate || 0)*100).toFixed(1)}%
+                </div>
               </div>
             </div>
+
+            {/* Active model selector */}
+            {versionList.length > 1 && (
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className="text-xs text-slate-500">Active model:</span>
+                <select
+                  value={champion.version}
+                  disabled={!!promoting}
+                  onChange={e => handlePromote(e.target.value)}
+                  className="bg-surface border border-border text-slate-200 text-xs font-mono rounded px-2 py-1.5 focus:outline-none focus:border-allow/60 disabled:opacity-50 cursor-pointer"
+                >
+                  {versionList.map(v => (
+                    <option key={v.version} value={v.version}>
+                      {v.version}{v.is_champion ? ' (champion)' : ''}
+                    </option>
+                  ))}
+                </select>
+                {promoting && (
+                  <span className="text-xs text-slate-500 animate-pulse">Swapping…</span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Metric gauges */}
@@ -167,6 +251,79 @@ export default function ModelPerformance() {
         )}
       </div>
 
+      {/* A/B Routing control */}
+      {versionList.length > 1 && (
+        <div className="panel space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs font-medium text-slate-300 uppercase tracking-widest">
+                A/B Champion / Challenger
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                Split live traffic between two models — see comparison in Grafana
+              </div>
+            </div>
+            <span className={`text-xs px-2 py-0.5 rounded border font-mono ${
+              abEnabled
+                ? 'text-review-text border-review/40 bg-review-dim'
+                : 'text-slate-500 border-border bg-surface'
+            }`}>
+              {abEnabled ? 'ACTIVE' : 'OFF'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-500">Challenger version</label>
+              <select
+                value={abChallenger}
+                onChange={e => setAbChallenger(e.target.value)}
+                disabled={abEnabled || abBusy}
+                className="bg-surface border border-border text-slate-200 text-xs font-mono rounded px-2 py-1.5 focus:outline-none focus:border-allow/60 disabled:opacity-50"
+              >
+                <option value="">— select —</option>
+                {versionList.filter(v => !v.is_champion).map(v => (
+                  <option key={v.version} value={v.version}>{v.version}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-500">Traffic to challenger: {abTrafficPct}%</label>
+              <input
+                type="range" min={5} max={50} step={5}
+                value={abTrafficPct}
+                onChange={e => setAbTrafficPct(Number(e.target.value))}
+                disabled={abEnabled || abBusy}
+                className="w-32 accent-review"
+              />
+            </div>
+
+            <button
+              onClick={handleABToggle}
+              disabled={abBusy || (!abEnabled && !abChallenger)}
+              className={`mt-4 px-3 py-1.5 rounded text-xs font-medium border transition-colors disabled:opacity-40 ${
+                abEnabled
+                  ? 'text-block-text border-block/40 bg-block-dim hover:bg-block/20'
+                  : 'text-review-text border-review/40 bg-review-dim hover:bg-review/20'
+              }`}
+            >
+              {abBusy ? 'Working…' : abEnabled ? 'Disable A/B' : 'Enable A/B'}
+            </button>
+          </div>
+
+          {abMsg && (
+            <div className={`text-xs px-3 py-2 rounded border ${
+              abMsg.ok
+                ? 'text-allow-text border-allow/30 bg-allow-dim'
+                : 'text-block-text border-block/30 bg-block-dim'
+            }`}>
+              {abMsg.text}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Version table */}
       {versionList.length > 0 && (
         <div className="panel p-0 overflow-hidden">
@@ -183,6 +340,7 @@ export default function ModelPerformance() {
                 <th className="tcell text-right font-medium">F1</th>
                 <th className="tcell text-right font-medium">Threshold</th>
                 <th className="tcell text-left font-medium">Status</th>
+                <th className="tcell text-left font-medium">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -200,10 +358,36 @@ export default function ModelPerformance() {
                       : <span className="text-xs text-slate-600">—</span>
                     }
                   </td>
+                  <td className="tcell">
+                    {!v.is_champion && (
+                      <button
+                        onClick={() => handlePromote(v.version)}
+                        disabled={!!promoting}
+                        title={`Promote ${v.version} to champion`}
+                        className="flex items-center gap-1 px-2 py-1 text-xs text-allow-text border border-allow/30 rounded hover:bg-allow-dim disabled:opacity-40 transition-colors"
+                      >
+                        <ArrowUpCircle size={11} />
+                        {promoting === v.version ? 'Promoting…' : 'Promote'}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {promoteOk && (
+        <div className="flex items-center gap-2 text-xs text-allow-text bg-allow-dim border border-allow/30 rounded-lg p-3">
+          <CheckCircle size={13} />
+          {promoteOk} promoted to champion — scorer hot-swapped
+        </div>
+      )}
+      {promoteError && (
+        <div className="flex items-center gap-2 text-xs text-block-text bg-block-dim border border-block/30 rounded-lg p-3">
+          <AlertTriangle size={13} />
+          Promote failed: {promoteError}
         </div>
       )}
 

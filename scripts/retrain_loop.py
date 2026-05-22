@@ -154,7 +154,7 @@ def main() -> None:
         registry.promote(metadata.version)
         result["promoted"] = True
         result["promotion_reason"] = "first_model"
-        console.print(f"\n[bold green]✓ {metadata.version} promoted (first model in registry)[/bold green]")
+        console.print(f"\n[bold green][ok] {metadata.version} promoted (first model in registry)[/bold green]")
 
     else:
         delta = metadata.auc_roc - champion_auc
@@ -179,7 +179,7 @@ def main() -> None:
 def _write_result(result: dict, path: str) -> None:
     with open(path, "w") as f:
         json.dump(result, f, indent=2)
-    console.print(f"\n  Result written → [dim]{path}[/dim]\n")
+    console.print(f"\n  Result written -> [dim]{path}[/dim]\n")
 
 
 if __name__ == "__main__":

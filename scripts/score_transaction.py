@@ -139,7 +139,7 @@ def write_label(transaction_id: str, is_fraud: bool,
             notes          = None,
         ))
     label_str = "[red]FRAUD[/red]" if is_fraud else "[green]LEGITIMATE[/green]"
-    console.print(f"  ✓ Labeled as {label_str}")
+    console.print(f"  [ok] Labeled as {label_str}")
 
 
 def main():
@@ -185,7 +185,7 @@ def main():
                     console.print(f"  Run [bold]python scripts/train_model.py[/bold] to retrain\n")
                 return
 
-    console.print(f"\n[bold green]✓ Review session complete![/bold green]")
+    console.print(f"\n[bold green][ok] Review session complete![/bold green]")
     console.print(f"  Labeled: {labeled} / {total}")
     if labeled > 0:
         console.print(f"\n  Run [bold]python scripts/train_model.py[/bold] to retrain on new labels\n")

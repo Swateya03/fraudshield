@@ -60,9 +60,9 @@
       "fieldConfig": {
         "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "reqps" },
         "overrides": [
-          { "matcher": { "id": "byLabelValue", "options": "allow" },  "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
-          { "matcher": { "id": "byLabelValue", "options": "review" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
-          { "matcher": { "id": "byLabelValue", "options": "block" },  "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+          { "matcher": { "id": "byName", "options": "allow" },  "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "review" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "block" },  "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
         ]
       },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
@@ -143,16 +143,15 @@
       "title": "Rollback Target (previous champion)",
       "description": "Version that auto_rollback.py would promote if health checks fail. Empty means no rollback available.",
       "type": "stat",
-      "targets": [{ "datasource": "Prometheus", "expr": "fraudshield_model_info offset 0s", "legendFormat": "rollback available" }]
+      "targets": [{ "datasource": "Prometheus", "expr": "fraudshield_rollback_target", "legendFormat": "{{version}} / {{strategy}}" }]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "reqps" },
+        "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "none" },
         "overrides": [
-          { "matcher": { "id": "byLabelValue", "options": "allow" },  "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
-          { "matcher": { "id": "byLabelValue", "options": "review" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
-          { "matcher": { "id": "byLabelValue", "options": "block" },  "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+          { "matcher": { "id": "byName", "options": "live block %" },          "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "rollback threshold (+15pp)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }, { "id": "custom.lineStyle", "value": { "dash": [8, 4], "fill": "dash" } }] }
         ]
       },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
@@ -163,7 +162,7 @@
       "type": "timeseries",
       "targets": [
         { "datasource": "Prometheus", "expr": "100 * sum(rate(fraudshield_decisions_total{decision=\"block\"}[5m])) / sum(rate(fraudshield_decisions_total[5m]))", "legendFormat": "live block %" },
-        { "datasource": "Prometheus", "expr": "fraudshield_model_info * 0 + 15", "legendFormat": "rollback threshold (+15pp)" }
+        { "datasource": "Prometheus", "expr": "vector(15)", "legendFormat": "rollback threshold (+15pp)" }
       ]
     },
     {
@@ -181,6 +180,135 @@
         { "datasource": "Prometheus", "expr": "sum(rate(fraudshield_sla_breaches_total[5m])) / sum(rate(fraudshield_decisions_total[5m]))", "legendFormat": "SLA breach %" },
         { "datasource": "Prometheus", "expr": "vector(0.05)", "legendFormat": "rollback threshold (5%)" }
       ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "short",
+          "thresholds": { "steps": [
+            { "color": "green",  "value": null  },
+            { "color": "yellow", "value": 0.10  },
+            { "color": "red",    "value": 0.20  }
+          ]}
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "id": 13,
+      "options": { "tooltip": { "mode": "multi" } },
+      "title": "PSI Drift per Feature",
+      "description": "Population Stability Index per feature. >0.10 = monitor, >0.20 = retrain required. Updated by POST /v1/model/drift or the drift monitor cron.",
+      "type": "timeseries",
+      "targets": [{
+        "datasource": "Prometheus",
+        "expr": "fraudshield_psi_score",
+        "legendFormat": "{{feature}}"
+      }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2 }, "unit": "short" },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": "champion.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": "challenger.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "#7BB8F8", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "id": 14,
+      "options": { "tooltip": { "mode": "multi" } },
+      "title": "Median Fraud Score — Champion vs Challenger",
+      "description": "p50 score by A/B variant. Divergence between champion and challenger indicates the challenger is scoring differently — investigate before promoting.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "histogram_quantile(0.50, sum by (le, ab_variant) (rate(fraudshield_score_by_variant_bucket[5m])))",
+          "legendFormat": "{{ab_variant}} p50"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "histogram_quantile(0.95, sum by (le, ab_variant) (rate(fraudshield_score_by_variant_bucket[5m])))",
+          "legendFormat": "{{ab_variant}} p95"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "color": "green",  "value": null        },
+            { "color": "yellow", "value": 518400      },
+            { "color": "red",    "value": 604800      }
+          ]},
+          "unit": "s",
+          "noValue": "no model"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 40 },
+      "id": 15,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+      "title": "Model Age",
+      "description": "Seconds since the active model was registered. >6 days = yellow, >7 days = red (retrain recommended).",
+      "type": "stat",
+      "targets": [{
+        "datasource": "Prometheus",
+        "expr": "time() - fraudshield_model_info",
+        "legendFormat": "age"
+      }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "color": "green", "value": null  },
+            { "color": "red",   "value": 0.01  }
+          ]},
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 40 },
+      "id": 16,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+      "title": "SLA Breach Rate (5m)",
+      "description": ">1% = warning alert fires. >5% = auto-rollback triggers.",
+      "type": "stat",
+      "targets": [{
+        "datasource": "Prometheus",
+        "expr": "sum(rate(fraudshield_sla_breaches_total[5m])) / sum(rate(fraudshield_decisions_total[5m]))",
+        "legendFormat": "breach %"
+      }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "color": "green",  "value": null },
+            { "color": "yellow", "value": 0.10 },
+            { "color": "red",    "value": 0.20 }
+          ]},
+          "unit": "short",
+          "noValue": "no drift data"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 40 },
+      "id": 17,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "background" },
+      "title": "Max PSI (worst feature)",
+      "description": "Highest PSI across all monitored features. Triggers FeatureDriftWarning at 0.10, FeatureDriftCritical at 0.20.",
+      "type": "stat",
+      "targets": [{
+        "datasource": "Prometheus",
+        "expr": "max(fraudshield_psi_score)",
+        "legendFormat": "max PSI"
+      }]
     }
   ],
   "refresh": "10s",
@@ -190,5 +318,5 @@
   "timepicker": {},
   "title": "FraudShield — Model Observability",
   "uid": "fraudshield-main",
-  "version": 2
+  "version": 3
 }

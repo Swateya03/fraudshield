@@ -54,8 +54,8 @@ def make_drift_fraud_txn(user_id: str, avg_amount: float, base_time: datetime) -
     amount = avg_amount * rng.uniform(1.5, 3.5)     # much smaller than 8-40x
 
     # Still targets high-risk merchants
-    bad_merchants = ["m_crypto", "m_giftcard", "m_jewelry", "m_luxury"]
-    merchant_id   = rng.choice(bad_merchants)
+    from fraudshield_core.config import config as _cfg
+    merchant_id = rng.choice(sorted(_cfg.HIGH_RISK_MERCHANT_IDS))
 
     ts = base_time.replace(
         hour=hour, minute=rng.randint(0, 59),
@@ -85,12 +85,13 @@ def inject(n_days: int = 7, txns_per_day: int = 400):
     now    = datetime.utcnow()
 
     # Get real user IDs + their avg amounts from DB
+    # Prefer labeled non-fraud users; fall back to any transaction users.
     with engine.connect() as conn:
         rows = conn.execute(text("""
             SELECT t.user_id, AVG(t.amount) as avg_amount
             FROM transactions t
-            JOIN fraud_labels fl ON fl.transaction_id = t.id
-            WHERE fl.is_fraud = 0
+            LEFT JOIN fraud_labels fl ON fl.transaction_id = t.id
+            WHERE fl.is_fraud = 0 OR fl.id IS NULL
             GROUP BY t.user_id
             LIMIT 30
         """)).fetchall()
@@ -140,15 +141,15 @@ def inject(n_days: int = 7, txns_per_day: int = 400):
                 )
             injected += 1
 
-    console.print(f"[bold green]✓ Injected {injected} drift-phase transactions[/bold green]")
+    console.print(f"[bold green][ok] Injected {injected} drift-phase transactions[/bold green]")
     console.print(f"\n  Pattern change summary:")
     console.print(f"  [red]Old:[/red] new device + Tor IP + 3am + 10-40x amount")
     console.print(f"  [yellow]New:[/yellow] known device + clean IP + 9am + 1.5-3.5x amount")
     console.print(f"\n  Features that will drift:")
-    console.print(f"  [yellow]device_trust_score[/yellow]  → was 0.0 (new device), now ~0.5 (known)")
-    console.print(f"  [yellow]ip_fraud_history[/yellow]    → was 1.0 (Tor), now 0.0 (clean VPN)")
-    console.print(f"  [yellow]is_late_night[/yellow]       → was 1.0 (3am), now 0.0 (9am)")
-    console.print(f"  [yellow]amount_ratio[/yellow]        → was 10-40x, now 1.5-3.5x")
+    console.print(f"  [yellow]device_trust_score[/yellow]  -> was 0.0 (new device), now ~0.5 (known)")
+    console.print(f"  [yellow]ip_fraud_history[/yellow]    -> was 1.0 (Tor), now 0.0 (clean VPN)")
+    console.print(f"  [yellow]is_late_night[/yellow]       -> was 1.0 (3am), now 0.0 (9am)")
+    console.print(f"  [yellow]amount_ratio[/yellow]        -> was 10-40x, now 1.5-3.5x")
     console.print(f"\n  Next: [bold]python scripts/check_drift.py[/bold]\n")
 
 

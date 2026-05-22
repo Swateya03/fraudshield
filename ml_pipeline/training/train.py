@@ -28,6 +28,7 @@ import mlflow.xgboost
 
 from fraudshield_core.config import config
 from fraudshield_core.models import FeatureVector, ModelMetadata
+from ml_pipeline.data.schema import validate_features
 
 
 def train(X: pd.DataFrame, y: pd.Series,
@@ -41,6 +42,16 @@ def train(X: pd.DataFrame, y: pd.Series,
     Returns (calibrated_model, metadata).
     """
     version = version or f"v{datetime.utcnow().strftime('%Y%m%d_%H%M')}"
+
+    # ── Pandera feature schema validation ─────────────────────
+    # Catches NaNs, out-of-range values, and wrong column types
+    # before any training computation starts.
+    try:
+        validate_features(X)
+        print("  Schema validation: PASSED")
+    except Exception as e:
+        print(f"  Schema validation: FAILED - {e}")
+        raise
 
     # ── Split ─────────────────────────────────────────────────
     if groups is not None:

@@ -76,7 +76,7 @@ def _compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df["amount_ratio"]       = df["_amount_inr"] / avg_hist
     df["is_new_device"]      = ((df["device_age_days"].isna()) | (df["device_age_days"] < 1)).astype(int)
-    df["device_trust_score"] = (df["device_age_days"].fillna(0) / 30).clip(upper=1.0)
+    df["device_trust_score"] = (df["device_age_days"].fillna(0) / 30).clip(lower=0.0, upper=1.0)
     df["is_late_night"]      = (df["_ts"].dt.hour < 5).astype(int)
     df["hour_of_day"]        = df["_ts"].dt.hour
     df["day_of_week"]        = df["_ts"].dt.dayofweek

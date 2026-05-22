@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import {
-  Activity, Search, Zap, Users, BarChart2,
+  Activity, Briefcase, Zap, BarChart2,
   TrendingUp, Shield, Circle,
 } from 'lucide-react'
 import { usePolling } from '../hooks/usePolling'
@@ -8,9 +8,8 @@ import { getHealth }  from '../api/client'
 
 const NAV = [
   { to: '/',          icon: Activity,   label: 'Live Feed'        },
-  { to: '/explorer',  icon: Search,     label: 'Explorer'         },
+  { to: '/investigate',icon: Briefcase,  label: 'Investigate'      },
   { to: '/explainer', icon: Zap,        label: 'Score Explainer'  },
-  { to: '/users',     icon: Users,      label: 'Risk Manager'     },
   { to: '/model',     icon: BarChart2,  label: 'Model Performance'},
   { to: '/drift',     icon: TrendingUp, label: 'Drift Monitor'    },
 ]
@@ -62,7 +61,7 @@ export default function Layout() {
               className={online ? 'fill-allow text-allow animate-pulse_soft' : 'fill-slate-600 text-slate-600'}
             />
             <span className={online ? 'text-allow-text' : 'text-slate-500'}>
-              {online ? `API · ${health?.strategy?.replace('_',' ')}` : 'API offline'}
+              {online ? `API · ${health?.checks?.model?.version ?? health?.checks?.model?.strategy?.replace('_',' ')}` : 'API offline'}
             </span>
           </div>
         </div>

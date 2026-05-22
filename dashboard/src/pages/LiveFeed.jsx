@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Activity } from 'lucide-react'
-import { getTransactions, getDashboardStats } from '../api/client'
+import { getTransactions, getDashboardStats, getSSEToken } from '../api/client'
 import { fmtAmount, fmtTime, decisionClass, scoreColor, shortId } from '../lib/utils'
-
-const SSE_TOKEN = import.meta.env.VITE_API_TOKEN || 'dev_token_fraudshield_local_only'
 
 const MAX_FEED = 50
 
@@ -69,26 +67,50 @@ export default function LiveFeed() {
   // SSE — push new transactions instantly as they are scored
   const [connected, setConnected] = useState(false)
   useEffect(() => {
-    const es = new EventSource(`/api/v1/stream?token=${SSE_TOKEN}`)
+    let es = null
+    let mounted = true
+    let retryMs = 2000
 
-    es.onopen = () => setConnected(true)
-
-    es.onmessage = (e) => {
-      if (e.data.startsWith(':')) return   // keepalive comment
-      if (pausedRef.current) return
+    async function connect() {
+      if (!mounted) return
       try {
-        const txn = JSON.parse(e.data)
-        setFeed(old => {
-          const seen = new Set(old.map(t => t.transaction_id || t.id))
-          if (seen.has(txn.transaction_id)) return old
-          return [txn, ...old].slice(0, MAX_FEED)
-        })
-      } catch (_) {}
+        const { token } = await getSSEToken()
+        if (!mounted) return
+
+        es = new EventSource(`/api/v1/stream?token=${token}`)
+
+        es.onopen = () => { setConnected(true); retryMs = 2000 }
+
+        es.onmessage = (e) => {
+          if (e.data.startsWith(':')) return   // keepalive comment
+          if (pausedRef.current) return
+          try {
+            const txn = JSON.parse(e.data)
+            setFeed(old => {
+              const seen = new Set(old.map(t => t.transaction_id || t.id))
+              if (seen.has(txn.transaction_id)) return old
+              return [txn, ...old].slice(0, MAX_FEED)
+            })
+          } catch (_) {}
+        }
+
+        es.onerror = () => {
+          setConnected(false)
+          es.close()
+          // Exponential backoff with jitter, capped at 30 s
+          const jitter = Math.random() * 1000
+          setTimeout(connect, Math.min(retryMs + jitter, 30000))
+          retryMs = Math.min(retryMs * 2, 30000)
+        }
+      } catch (_) {
+        setConnected(false)
+        setTimeout(connect, Math.min(retryMs, 30000))
+        retryMs = Math.min(retryMs * 2, 30000)
+      }
     }
 
-    es.onerror = () => setConnected(false)
-
-    return () => { es.close(); setConnected(false) }
+    connect()
+    return () => { mounted = false; es?.close(); setConnected(false) }
   }, [])
 
   // Stats still polled — no need for SSE on aggregate numbers
@@ -180,13 +202,14 @@ export default function LiveFeed() {
                 <th className="tcell text-left font-medium">IP</th>
                 <th className="tcell text-right font-medium">Amount</th>
                 <th className="tcell text-left font-medium">Score</th>
+                <th className="tcell text-left font-medium">Model</th>
                 <th className="tcell text-left font-medium">Decision</th>
               </tr>
             </thead>
             <tbody>
               {feed.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="tcell text-center text-slate-600 py-12">
+                  <td colSpan={10} className="tcell text-center text-slate-600 py-12">
                     No transactions yet — run scripts/simulate_live.py to start the feed
                   </td>
                 </tr>
@@ -217,6 +240,16 @@ export default function LiveFeed() {
                   </td>
                   <td className="tcell">
                     <ScoreBar score={txn.fraud_probability ?? txn.score ?? 0} />
+                  </td>
+                  <td className="tcell">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="font-mono text-xs text-slate-300">
+                        {txn.serving_version ?? txn.model_version ?? txn.strategy_used ?? '—'}
+                      </span>
+                      {(txn.ab_variant === 'challenger') && (
+                        <span className="text-[10px] text-review-text">challenger</span>
+                      )}
+                    </div>
                   </td>
                   <td className="tcell">
                     <span className={decisionClass(txn.decision)}>

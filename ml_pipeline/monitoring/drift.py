@@ -91,18 +91,15 @@ def run_drift_report(baseline_days: int = 60,
 
     # ── Compute PSI for key features ─────────────────────────
     results = {}
-    FRAUD_IPS = {"185.220.101.5", "185.220.101.6", "192.42.116.16",
-                  "199.87.154.255", "23.129.64.131"}
-    HIGH_RISK_MERCHANTS = {"m_crypto", "m_giftcard", "m_jewelry", "m_luxury"}
-
+    from fraudshield_core.config import config as _cfg
     feature_extractors = {
         "amount_log":           lambda df: np.log1p(df["amount"]),
         "velocity_1h":          lambda df: df["velocity_1h"].fillna(0),
         "is_late_night":        lambda df: df["created_at"].apply(
                                     lambda x: 1.0 if isinstance(x, str) and int(x[11:13]) < 5 else 0.0
                                 ),
-        "ip_fraud_history":     lambda df: df["ip_address"].isin(FRAUD_IPS).astype(float),
-        "merchant_risk_score":  lambda df: df["merchant_id"].isin(HIGH_RISK_MERCHANTS).astype(float),
+        "ip_fraud_history":     lambda df: df["ip_address"].isin(_cfg.FRAUD_IP_LIST).astype(float),
+        "merchant_risk_score":  lambda df: df["merchant_id"].isin(_cfg.HIGH_RISK_MERCHANT_IDS).astype(float),
         "hour_of_day":          lambda df: df["created_at"].apply(
                                     lambda x: float(x[11:13]) if isinstance(x, str) else 0.0
                                 ),
@@ -143,7 +140,7 @@ def run_drift_report(baseline_days: int = 60,
         "STABLE"
     )
 
-    return {
+    report = {
         "computed_at":      datetime.utcnow().isoformat(),
         "baseline_window":  f"last {baseline_days} days",
         "current_window":   f"last {current_days} days",
@@ -154,3 +151,13 @@ def run_drift_report(baseline_days: int = 60,
         "psi_threshold":    config.PSI_THRESHOLD,
         "recommendation":   recommendation,
     }
+
+    # Push PSI values into Prometheus so the alerting rule fires precisely.
+    # Silently skipped if the metrics module is unavailable (e.g. in CLI context).
+    try:
+        from fraud_api.metrics import update_psi_metrics
+        update_psi_metrics(psi_results)
+    except Exception:
+        pass
+
+    return report

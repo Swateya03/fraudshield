@@ -1,0 +1,151 @@
+groups:
+  # ── Latency alerts ─────────────────────────────────────────────────────────
+  - name: fraudshield.latency
+    rules:
+      - alert: ScoringLatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            rate(fraudshield_scoring_latency_seconds_bucket[5m])
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scoring p99 latency > 100ms"
+          description: |
+            p99 latency is {{ $value | humanizeDuration }} over the last 5 minutes.
+            SLA target is 50ms p99. Investigate DB query times and Redis connectivity.
+
+      - alert: ScoringLatencyCritical
+        expr: |
+          histogram_quantile(0.99,
+            rate(fraudshield_scoring_latency_seconds_bucket[5m])
+          ) > 0.2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scoring p99 latency > 200ms — SLA breach"
+          description: |
+            p99 latency is {{ $value | humanizeDuration }}. SLA is being breached.
+            Check DB pool exhaustion, Redis timeouts, and GC pauses.
+
+  # ── Error rate alerts ──────────────────────────────────────────────────────
+  - name: fraudshield.errors
+    rules:
+      - alert: HighSLABreachRate
+        expr: |
+          rate(fraudshield_sla_breaches_total[5m]) /
+          rate(fraudshield_decisions_total[5m]) > 0.01
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 1% of requests breaching 200ms SLA"
+          description: |
+            {{ $value | humanizePercentage }} of scoring requests are over 200ms SLA.
+
+  # ── Decision distribution alerts ───────────────────────────────────────────
+  - name: fraudshield.decisions
+    rules:
+      - alert: BlockRateSpike
+        expr: |
+          rate(fraudshield_decisions_total{decision="block"}[10m]) /
+          rate(fraudshield_decisions_total[10m]) > 0.20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "BLOCK rate > 20% — possible model degradation or attack spike"
+          description: |
+            Block rate is {{ $value | humanizePercentage }} over the last 10m.
+            Normal baseline is ~5–8%. Possible causes: model score collapse,
+            new fraud campaign, or a misconfigured threshold (FRAUD_THRESHOLD env var).
+
+      - alert: BlockRateDrop
+        expr: |
+          rate(fraudshield_decisions_total{decision="block"}[30m]) /
+          rate(fraudshield_decisions_total[30m]) < 0.005
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "BLOCK rate < 0.5% — model may have stopped scoring correctly"
+          description: |
+            Block rate is {{ $value | humanizePercentage }} over the last 30m.
+            This is unexpectedly low — check that the XGBoost model is loaded
+            (not silently falling back to a lenient rule-based strategy).
+
+      - alert: AllowRateSuddenDrop
+        expr: |
+          rate(fraudshield_decisions_total{decision="allow"}[10m]) /
+          rate(fraudshield_decisions_total[10m]) < 0.50
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ALLOW rate < 50% — most transactions being blocked or reviewed"
+          description: |
+            Allow rate dropped to {{ $value | humanizePercentage }}.
+            This will cause severe customer impact. Check FRAUD_THRESHOLD configuration
+            and model version currently serving.
+
+  # ── PSI feature drift alerts ────────────────────────────────────────────────
+  - name: fraudshield.psi_drift
+    rules:
+      - alert: FeatureDriftWarning
+        expr: fraudshield_psi_score > 0.10
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feature {{ $labels.feature }} PSI > 0.10 — slight drift detected"
+          description: |
+            PSI for {{ $labels.feature }} is {{ $value | humanize }}.
+            Threshold 0.10 = moderate drift. Monitor closely and plan a retrain.
+
+      - alert: FeatureDriftCritical
+        expr: fraudshield_psi_score > 0.20
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Feature {{ $labels.feature }} PSI > 0.20 — retrain required"
+          description: |
+            PSI for {{ $labels.feature }} is {{ $value | humanize }}.
+            Threshold 0.20 = significant drift. Trigger retraining immediately:
+            POST /v1/model/retrain  or  python scripts/train_model.py
+
+  # ── Score distribution drift (proxy, while PSI not yet populated) ──────────
+  - name: fraudshield.score_drift
+    rules:
+      - alert: ScoreDistributionShift
+        expr: |
+          histogram_quantile(0.50,
+            rate(fraudshield_score_by_variant_bucket{ab_variant="champion"}[1h])
+          ) > 0.4
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Median fraud score > 0.4 — possible score distribution shift"
+          description: |
+            The median fraud probability score is {{ $value | humanize }}.
+            Normal median should be < 0.15 for a healthy transaction mix.
+            Run the PSI drift check: POST /v1/model/drift or python scripts/check_drift.py
+
+  # ── Model info alerts ──────────────────────────────────────────────────────
+  - name: fraudshield.model
+    rules:
+      - alert: ModelVersionStale
+        expr: |
+          time() - fraudshield_model_info > 7 * 24 * 3600
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Model has not been retrained in > 7 days"
+          description: |
+            The active model version has been serving for more than 7 days without
+            a retrain. If new labelled chargebacks are available, trigger a retrain:
+            python scripts/train_model.py

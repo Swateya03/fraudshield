@@ -134,7 +134,7 @@ def _print_result(txn: dict, result: dict) -> None:
     score    = result["fraud_probability"]
     print(
         f"  {color}[{decision.upper():6}]{_RESET} "
-        f"{txn['user_id']:8} → {txn['merchant_id']:15} "
+        f"{txn['user_id']:8} -> {txn['merchant_id']:15} "
         f"{txn['currency']:3} {txn['amount']:>9,.0f}  "
         f"score={score:.3f}  "
         f"via {txn['channel']:6}  ip={txn['ip_address']}"
@@ -152,7 +152,7 @@ def main():
     print(f"\n  FraudShield Live Simulator")
     print(f"  Target: {API_URL}")
     print(f"  Rate:   ~1 transaction every {args.rate}s")
-    print(f"  Mix:    80% legit · 12% suspicious · 8% fraud")
+    print(f"  Mix:    80% legit / 12% suspicious / 8% fraud")
     print(f"  Press Ctrl+C to stop\n")
 
     total = blocked = 0
@@ -178,8 +178,8 @@ def main():
                 if result["decision"] == "block":
                     blocked += 1
                 if total % 20 == 0:
-                    print(f"\n  ── {total} transactions · {blocked} blocked "
-                          f"({blocked/total*100:.1f}% block rate) ──\n")
+                    print(f"\n  -- {total} transactions - {blocked} blocked "
+                          f"({blocked/total*100:.1f}% block rate) --\n")
             else:
                 print(f"  [ERROR {r.status_code}] {r.text[:120]}")
         except requests.ConnectionError:

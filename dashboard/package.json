@@ -8,7 +8,10 @@
     "dev:api": "node dev-api.mjs",
     "dev:stack": "concurrently -k -n api,web -c cyan,magenta \"npm run dev:api\" \"vite\"",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test":  "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "react":          "^18.3.1",
@@ -35,6 +38,12 @@
     "tailwindcss": "^3.4.4",
     "autoprefixer":"^10.4.19",
     "postcss":     "^8.4.38",
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "vitest":      "^1.6.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "jsdom":                        "^25.0.0",
+    "@testing-library/react":       "^16.0.0",
+    "@testing-library/jest-dom":    "^6.4.0",
+    "@testing-library/user-event":  "^14.5.0"
   }
 }

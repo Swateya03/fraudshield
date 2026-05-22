@@ -73,11 +73,36 @@ jobs:
             ${{ env.IMAGE_PREFIX }}-ml-pipeline:latest
             ${{ env.IMAGE_PREFIX }}-ml-pipeline:${{ github.sha }}
 
+  # ── Production deploy — requires explicit reviewer approval ──────────────
+  deploy-production:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: [build-fraud-api, build-ml-pipeline]
+    environment:
+      name: production       # maps to the "production" environment in repo Settings
+      url: https://fraud.yourcompany.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy fraud-api to cluster
+        run: |
+          echo "Deploying ${{ env.IMAGE_PREFIX }}-fraud-api:${{ github.sha }}"
+          # Replace with your deployment command, e.g.:
+          # kubectl set image deployment/fraudshield-api \
+          #   api=${{ env.IMAGE_PREFIX }}-fraud-api:${{ github.sha }} \
+          #   -n fraudshield
+
+      - name: Verify rollout
+        run: |
+          echo "Verifying deployment..."
+          # kubectl rollout status deployment/fraudshield-api -n fraudshield --timeout=120s
+
   # ── Summary ───────────────────────────────────────────────────────────────
   summary:
     name: Deployment summary
     runs-on: ubuntu-latest
-    needs: [build-fraud-api, build-ml-pipeline]
+    needs: [deploy-production]
 
     steps:
       - name: Print image tags
@@ -86,3 +111,4 @@ jobs:
           echo "  fraud-api:   ${{ env.IMAGE_PREFIX }}-fraud-api:${{ github.sha }}"
           echo "  ml-pipeline: ${{ env.IMAGE_PREFIX }}-ml-pipeline:${{ github.sha }}"
           echo "Git SHA: ${{ github.sha }}"
+          echo "Environment: production (approved by reviewer)"

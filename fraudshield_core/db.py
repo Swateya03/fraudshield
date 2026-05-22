@@ -33,11 +33,31 @@ if "sqlite" in config.DB_URL:
     if _db_dir:
         os.makedirs(_db_dir, exist_ok=True)
 
+_is_sqlite = "sqlite" in config.DB_URL
+
+# SQLite uses StaticPool (single connection, no pool overhead).
+# PostgreSQL gets explicit pool settings tuned for the API's async-to-thread model:
+#   pool_size=10  — baseline connections kept alive
+#   max_overflow=20 — burst headroom (total max = 30)
+#   pool_timeout=10 — raise after 10s if no connection available (fail fast)
+#   pool_recycle=1800 — recycle connections every 30 min (avoids stale TCP)
+if _is_sqlite:
+    from sqlalchemy.pool import NullPool
+    _pool_kwargs: dict = {"poolclass": NullPool}
+else:
+    _pool_kwargs = {
+        "pool_size":    int(os.getenv("DB_POOL_SIZE",    "10")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "20")),
+        "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "10")),
+        "pool_recycle": int(os.getenv("DB_POOL_RECYCLE", "1800")),
+    }
+
 engine: Engine = create_engine(
     config.DB_URL,
     connect_args=connect_args,
     echo=False,          # set True to see SQL in terminal (debugging)
     pool_pre_ping=True,  # check connection health before using
+    **_pool_kwargs,
 )
 
 if "sqlite" in config.DB_URL:
@@ -115,6 +135,7 @@ fraud_scores_table = Table("fraud_scores", metadata,
     Column("strategy_used",  String,  nullable=False),
     Column("latency_ms",     Integer),
     Column("scored_at",      DateTime,nullable=False),
+    Column("ab_variant",     String,  nullable=True, default="champion"),
 )
 
 fraud_labels_table = Table("fraud_labels", metadata,
@@ -136,6 +157,7 @@ user_risk_history_table = Table("user_risk_history", metadata,
     Column("valid_to",      DateTime),                  # NULL = currently active
     Column("changed_by",    String,  nullable=False),
     Column("change_reason", Text),
+    Column("caller_ip",     String),                    # IP of the API caller
 )
 
 
@@ -156,10 +178,30 @@ Index("idx_risk_hist_user",  user_risk_history_table.c.user_id,
                              user_risk_history_table.c.valid_from)
 
 
+def _run_migrations() -> None:
+    """Add columns introduced after the initial schema. Safe to run on every startup."""
+    with engine.begin() as conn:
+        existing_rh = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(user_risk_history)")).fetchall()
+        }
+        if "caller_ip" not in existing_rh:
+            conn.execute(text("ALTER TABLE user_risk_history ADD COLUMN caller_ip TEXT"))
+
+        existing_fs = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(fraud_scores)")).fetchall()
+        }
+        if "ab_variant" not in existing_fs:
+            conn.execute(text("ALTER TABLE fraud_scores ADD COLUMN ab_variant TEXT DEFAULT 'champion'"))
+
+
 def create_all_tables() -> None:
     """Create all tables. Safe to call multiple times (CREATE IF NOT EXISTS)."""
     metadata.create_all(engine)
-    print("✓ All tables created")
+    if "sqlite" in config.DB_URL:
+        _run_migrations()
+    print("[ok] All tables created")
 
 
 def get_engine() -> Engine:

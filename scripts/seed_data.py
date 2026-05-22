@@ -229,7 +229,7 @@ def seed():
     (meta_dir / "dataset_metadata.json").write_text(json.dumps(meta, indent=2, default=str))
 
     fraud_count = sum(1 for t in transactions if t.get("is_fraud"))
-    console.print(f"\n[bold green]✓ Seed complete![/bold green]")
+    console.print(f"\n[bold green][ok] Seed complete![/bold green]")
     console.print(f"  Merchants:    {len(MERCHANTS)}")
     console.print(f"  Users:        {len(users)}")
     console.print(f"  Devices:      {len(devices)}")

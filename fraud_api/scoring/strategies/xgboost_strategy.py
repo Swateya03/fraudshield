@@ -35,9 +35,12 @@ class XGBoostStrategy(ScoringStrategy):
     """
     name = "xgboost_v1"
 
-    def __init__(self, model_path: str = None):
+    def __init__(self, model_path: str = None, version: str = None):
         if model_path:
             self._model_path = model_path
+        elif version:
+            self._model_path = os.path.join(config.MODEL_REGISTRY_PATH, version)
+            self.name = f"xgboost_{version}"
         else:
             resolved = _champion_model_dir()
             self._model_path = resolved or os.path.join(
@@ -129,6 +132,35 @@ class XGBoostStrategy(ScoringStrategy):
             "score":        round(prob, 4),
             "reason_codes": reason_codes,
         }
+
+    def get_feature_importances(self) -> list[dict]:
+        """
+        Return feature importances sorted by XGBoost gain.
+        Each entry: {"feature": name, "importance": float, "rank": int}
+        Returns [] if model not loaded or importances unavailable.
+        """
+        if not self._model_loaded or self._model is None:
+            return []
+        try:
+            import numpy as np
+            from sklearn.calibration import CalibratedClassifierCV
+            base = self._model
+            if isinstance(base, CalibratedClassifierCV):
+                base = base.calibrated_classifiers_[0].estimator
+            scores = base.get_booster().get_score(importance_type="gain")
+            feature_names = FeatureVector.FEATURE_NAMES
+            results = []
+            total = sum(scores.values()) or 1.0
+            for i, name in enumerate(feature_names):
+                key = f"f{i}"
+                imp = scores.get(key, 0.0)
+                results.append({"feature": name, "importance": round(imp / total, 6)})
+            results.sort(key=lambda x: x["importance"], reverse=True)
+            for rank, item in enumerate(results, 1):
+                item["rank"] = rank
+            return results
+        except Exception:
+            return []
 
     def reload(self, new_path: str = None) -> None:
         """Hot-reload a new model version. No restart needed."""

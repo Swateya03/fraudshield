@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Zap, Send } from 'lucide-react'
-import { scoreTransaction } from '../api/client'
+import { scoreAndExplain } from '../api/client'
 import { fmtAmount, scoreColor, decisionClass } from '../lib/utils'
 
 const PRESETS = [
@@ -70,7 +70,7 @@ export default function ScoreExplainer() {
   async function score() {
     setLoading(true); setError(null)
     try {
-      const res = await scoreTransaction({
+      const res = await scoreAndExplain({
         transaction_id: nextTxnId(),
         user_id:     form.user_id,
         merchant_id: form.merchant_id,

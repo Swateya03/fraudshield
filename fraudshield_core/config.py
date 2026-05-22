@@ -61,6 +61,13 @@ class Config:
     API_PORT: int         = int(os.getenv("API_PORT", "8000"))
     API_TOKEN: str        = os.getenv("API_TOKEN", "dev_token_fraudshield_local_only")
     RATE_LIMIT_PER_SECOND: int = int(os.getenv("RATE_LIMIT_PER_SECOND", "100"))
+    # Comma-separated list of allowed origins for CORS.
+    # In production set this to your dashboard domain, e.g. https://fraud.yourcompany.com
+    CORS_ORIGINS: list    = [
+        o.strip() for o in
+        os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+        if o.strip()
+    ]
 
     # ── Model ─────────────────────────────────
     MODEL_REGISTRY_PATH: str   = _resolve_data_path(os.getenv("MODEL_REGISTRY_PATH", "local_store/model_registry"))
@@ -76,6 +83,13 @@ class Config:
 
     # ── Training ───────────────────────────────
     USE_PU_LEARNING: bool  = os.getenv("USE_PU_LEARNING", "false").lower() == "true"
+
+    # ── Champion / Challenger A/B routing ──────
+    # Set CHALLENGER_MODEL_VERSION to an existing registry version +
+    # CHALLENGER_TRAFFIC_PCT to a float in [0.0, 1.0] (e.g. 0.10 = 10%).
+    # Leave CHALLENGER_MODEL_VERSION empty (default) to disable A/B routing.
+    CHALLENGER_MODEL_VERSION: str   = os.getenv("CHALLENGER_MODEL_VERSION", "")
+    CHALLENGER_TRAFFIC_PCT:   float = float(os.getenv("CHALLENGER_TRAFFIC_PCT", "0.0"))
 
     # ── Fraud Signal Lists ────────────────────
     FRAUD_IP_LIST: frozenset = _parse_set(
@@ -110,11 +124,23 @@ class Config:
     # ── Drift Detection ───────────────────────
     PSI_THRESHOLD: float       = float(os.getenv("PSI_THRESHOLD", "0.20"))
     DRIFT_CHECK_WINDOW_DAYS: int = int(os.getenv("DRIFT_CHECK_WINDOW_DAYS", "7"))
+    # Automatically trigger retraining when drift report returns RETRAIN_REQUIRED.
+    DRIFT_AUTO_RETRAIN: bool   = os.getenv("DRIFT_AUTO_RETRAIN", "false").lower() == "true"
+
+    # ── A/B Champion/Challenger auto-promotion ─
+    # Challenger is auto-promoted when its AUC exceeds the champion's by at least this margin.
+    AB_PROMOTE_THRESHOLD: float = float(os.getenv("AB_PROMOTE_THRESHOLD", "0.01"))
 
     # ── Event Publisher ───────────────────────
     EVENT_PUBLISHER_BACKEND: str = os.getenv("EVENT_PUBLISHER_BACKEND", "memory")
     KAFKA_BROKERS: str           = os.getenv("KAFKA_BROKERS", "localhost:9092")
     KAFKA_TOPIC_SCORED: str      = os.getenv("KAFKA_TOPIC_SCORED", "scored_transactions")
+
+    # ── Webhook ───────────────────────────────
+    # Fire a POST to WEBHOOK_URL for each decision in WEBHOOK_EVENTS.
+    # WEBHOOK_EVENTS: comma-separated subset of "block,review,allow" (default: block only)
+    WEBHOOK_URL:    str       = os.getenv("WEBHOOK_URL", "")
+    WEBHOOK_EVENTS: frozenset = _parse_set("WEBHOOK_EVENTS", "block")
 
     # ── Logging ───────────────────────────────
     LOG_LEVEL: str        = os.getenv("LOG_LEVEL", "INFO")

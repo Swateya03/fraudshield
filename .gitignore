@@ -21,3 +21,17 @@ notebooks/.ipynb_checkpoints/
 dist/
 build/
 .pytest_cache/
+
+# Claude Code workspace
+.claude/
+
+# Local research & documentation (not committed)
+CODE_REVIEW.md
+PROJECT_KNOWLEDGE_BOOK.md
+ml_research.md
+architecture-diagram.svg
+
+# VSCode personal settings (keep extensions.json & settings.json)
+.vscode/launch.json
+.vscode/*.code-workspace
+.vscode/tasks.json

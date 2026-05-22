@@ -74,7 +74,7 @@ def main():
     table.add_row("Train rows",   f"{metadata.training_rows:,}")
     console.print(table)
 
-    console.print(f"\n[bold green]✓ Model {metadata.version} registered and deployed![/bold green]")
+    console.print(f"\n[bold green]Model {metadata.version} registered and deployed![/bold green]")
     console.print(f"\n  Next step: [bold]python fraud_api/main.py[/bold]\n")
 
 

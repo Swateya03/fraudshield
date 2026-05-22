@@ -91,7 +91,7 @@ class LocalFileRegistry(ModelRegistry):
         with open(os.path.join(version_dir, "metadata.json"), "w") as f:
             json.dump(meta_dict, f, indent=2)
 
-        print(f"  ✓ Saved model {metadata.version} to {version_dir}")
+        print(f"  [ok] Saved model {metadata.version} to {version_dir}")
         return metadata.version
 
     def load(self, version: str = "current") -> tuple:
@@ -164,7 +164,7 @@ class LocalFileRegistry(ModelRegistry):
         with open(current_file, "w") as f:
             f.write(version)
 
-        print(f"  ✓ Promoted {version} to champion")
+        print(f"  [ok] Promoted {version} to champion")
 
     def get_previous_version(self) -> Optional[str]:
         """Return the version that was champion before the current one, if known."""

@@ -90,4 +90,4 @@ def compute_and_store_features(days_lookback: int = 30) -> dict:
 
 if __name__ == "__main__":
     result = compute_and_store_features()
-    print(f"✓ Feature precompute complete: {result}")
+    print(f"[ok] Feature precompute complete: {result}")

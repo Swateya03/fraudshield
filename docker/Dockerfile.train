@@ -1,0 +1,41 @@
+# Dockerfile.train — reproducible ML training environment
+#
+# Build:  docker build -f Dockerfile.train -t fraudshield-train .
+# Train:  docker run --rm \
+#           -v $(pwd)/local_store:/app/local_store \
+#           -e DB_URL=sqlite:////app/local_store/fraud.db \
+#           -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
+#           fraudshield-train
+#
+# The container runs train_model.py and writes the model artifact
+# to /app/local_store/model_registry (mounted from the host).
+
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# System deps for XGBoost native libs and psycopg2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies first (layer cache)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source
+COPY fraudshield_core/ ./fraudshield_core/
+COPY fraud_api/        ./fraud_api/
+COPY ml_pipeline/      ./ml_pipeline/
+COPY scripts/          ./scripts/
+COPY setup.py          ./setup.py
+COPY pyproject.toml    ./pyproject.toml
+
+RUN pip install --no-cache-dir -e .
+
+# Default entrypoint: run full training pipeline
+# Override CMD to run other scripts, e.g.:
+#   docker run ... fraudshield-train python scripts/check_drift.py
+ENTRYPOINT ["python"]
+CMD ["scripts/train_model.py"]

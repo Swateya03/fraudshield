@@ -22,6 +22,7 @@ from fraudshield_core.models import (
     Transaction, FraudScore, FraudEvent,
     Decision, User, Merchant, Device
 )
+from fraudshield_core.logging import get_logger
 from fraud_api.repository.base import (
     UserRepository, TransactionRepository,
     FraudScoreRepository, FraudLabelRepository,
@@ -30,6 +31,8 @@ from fraud_api.repository.base import (
 from fraud_api.scoring.scorer import FraudScorer
 from fraud_api.scoring.feature_builder import FeatureBuilder
 from fraud_api.events.publisher import EventPublisher
+
+log = get_logger(__name__)
 
 
 class FraudService:
@@ -66,9 +69,11 @@ class FraudService:
         self.merchant_repo    = merchant_repo
 
     def process(self, txn: Transaction,
-                merchant:  Optional[Merchant] = None,
-                device:    Optional[Device]   = None,
-                dry_run:   bool               = False) -> FraudScore:
+                merchant:           Optional[Merchant] = None,
+                device:             Optional[Device]   = None,
+                dry_run:            bool               = False,
+                serving_version:    str                = "unknown",
+                challenger_version: str                = "") -> FraudScore:
         """
         Score a transaction end-to-end.
         Returns FraudScore with decision and explanation.
@@ -101,23 +106,44 @@ class FraudService:
         try:
             result = self.scorer.score(features)
         except Exception as ex:
-            print(f"  [FraudService] Scoring error: {ex} — using fallback")
+            log.error("scoring_error", error=str(ex), user_id=txn.user_id,
+                      txn_id=txn.id, action="fallback_to_rule_based")
             from fraud_api.scoring.strategies.rule_based import RuleBasedStrategy
             self.scorer.set_strategy(RuleBasedStrategy())
             result = self.scorer.score(features)
 
         # ── Step 6: Build FraudScore object ─────────────────────
         latency_ms = int(time.time() * 1000 - start_ms)
+
+        log.info("scored",
+                 txn_id=txn.id,
+                 user_id=txn.user_id,
+                 merchant_id=txn.merchant_id,
+                 amount=txn.amount,
+                 currency=txn.currency,
+                 score=round(result["score"], 4),
+                 decision=str(result["decision"].value if hasattr(result["decision"], "value") else result["decision"]),
+                 strategy=result.get("strategy_used", "unknown"),
+                 ab_variant=result.get("ab_variant", "champion"),
+                 latency_ms=latency_ms,
+                 dry_run=dry_run)
+
+        ab_variant = result.get("ab_variant", "champion")
+        used_version = (
+            challenger_version if ab_variant == "challenger" and challenger_version
+            else serving_version
+        )
         fraud_score = FraudScore(
             id             = str(uuid.uuid4()),
             transaction_id = txn.id,
             score          = result["score"],
             decision       = result["decision"],
             reason_codes   = result["reason_codes"],
-            model_version  = result.get("strategy_used", "unknown"),  # reads actual strategy,
+            model_version  = used_version,
             strategy_used  = result["strategy_used"],
             latency_ms     = latency_ms,
             scored_at      = datetime.utcnow(),
+            ab_variant     = ab_variant,
         )
 
         # ── Step 7: Save score ───────────────────────────────────
@@ -143,8 +169,7 @@ class FraudService:
         try:
             self.publisher.publish(event)
         except Exception as ex:
-            # Score is already committed — log and continue rather than surfacing a 500
-            print(f"  [FraudService] Event publish failed, score preserved: {ex}")
+            log.warning("event_publish_failed", txn_id=txn.id, error=str(ex))
 
         return fraud_score
 
@@ -188,5 +213,5 @@ class FraudService:
             try:
                 self.publisher.publish(event)
             except Exception as ex:
-                print(f"  [FraudService] Event publish failed (blocked), score preserved: {ex}")
+                log.warning("event_publish_failed_blocked", txn_id=txn.id, error=str(ex))
         return fraud_score

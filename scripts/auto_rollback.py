@@ -211,9 +211,9 @@ def main() -> None:
 
     if offline_failures:
         for f in offline_failures:
-            console.print(f"  [red]✗ {f}[/red]")
+            console.print(f"  [red][fail] {f}[/red]")
     else:
-        console.print(f"  [green]✓ AUC {meta.auc_roc:.4f}  Precision {meta.precision:.4f}  — within thresholds[/green]")
+        console.print(f"  [green][ok] AUC {meta.auc_roc:.4f}  Precision {meta.precision:.4f}  - within thresholds[/green]")
 
     # ── Step 2: Online check ───────────────────────────────────────────────────
     console.print(f"\n[bold]Step 2/2  Online metric check (last {args.window_minutes}m)…[/bold]")
@@ -223,19 +223,19 @@ def main() -> None:
 
     if online_failures:
         for f in online_failures:
-            console.print(f"  [red]✗ {f}[/red]")
+            console.print(f"  [red][fail] {f}[/red]")
 
     # ── Rollback decision ──────────────────────────────────────────────────────
     all_failures = offline_failures + online_failures
     result["rollback_triggered"] = bool(all_failures)
 
     if not all_failures:
-        console.print(f"\n[bold green]✓ Model {meta.version} is healthy — no rollback needed.[/bold green]\n")
+        console.print(f"\n[bold green][ok] Model {meta.version} is healthy - no rollback needed.[/bold green]\n")
         _write_result(result, args.output)
         sys.exit(0)
 
     # Failures detected
-    console.print(f"\n[bold red]⚠  {len(all_failures)} failure(s) detected — rollback required.[/bold red]")
+    console.print(f"\n[bold red][WARN] {len(all_failures)} failure(s) detected - rollback required.[/bold red]")
 
     previous = result["previous_version"]
     if not previous:
@@ -252,7 +252,7 @@ def main() -> None:
 
     rolled_back_to = registry.rollback()
     result["rolled_back_to"] = rolled_back_to
-    console.print(f"\n[bold green]✓ Rolled back to {rolled_back_to}[/bold green]\n")
+    console.print(f"\n[bold green][ok] Rolled back to {rolled_back_to}[/bold green]\n")
     _write_result(result, args.output)
     sys.exit(2)
 
@@ -260,7 +260,7 @@ def main() -> None:
 def _write_result(result: dict, path: str) -> None:
     with open(path, "w") as f:
         json.dump(result, f, indent=2)
-    console.print(f"  Result written → [dim]{path}[/dim]")
+    console.print(f"  Result written -> [dim]{path}[/dim]")
 
 
 if __name__ == "__main__":

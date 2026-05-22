@@ -1,0 +1,45 @@
+version: 2
+
+updates:
+  # ── Python dependencies ────────────────────────────────────────────────
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      # Batch minor/patch ML stack updates together — they break together
+      ml-stack:
+        patterns: [xgboost, scikit-learn, shap, mlflow, pandas, numpy]
+        update-types: [minor, patch]
+      testing:
+        patterns: [pytest*, httpx, schemathesis, factory-boy, locust, hypothesis]
+        update-types: [minor, patch]
+    ignore:
+      # SQLAlchemy 2.x → 3.x is a breaking change — pin major
+      - dependency-name: sqlalchemy
+        update-types: [version-update:semver-major]
+
+  # ── GitHub Actions ─────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 3
+
+  # ── npm (dashboard) ────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      radix-ui:
+        patterns: ["@radix-ui/*"]
+        update-types: [minor, patch]

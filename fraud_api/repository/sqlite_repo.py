@@ -86,7 +86,8 @@ class SQLiteUserRepository(UserRepository):
 
     def update_risk_tier(self, user_id: str, risk_tier: str,
                          changed_by: str = "system",
-                         reason: str = None) -> None:
+                         reason: str = None,
+                         caller_ip: str = None) -> None:
         now = datetime.utcnow()
         with self.engine.begin() as conn:
             # 1. Close current history record
@@ -110,6 +111,7 @@ class SQLiteUserRepository(UserRepository):
                     valid_to      = None,
                     changed_by    = changed_by,
                     change_reason = reason,
+                    caller_ip     = caller_ip,
                 )
             )
             # 3. Update current user record
@@ -238,6 +240,7 @@ class SQLiteFraudScoreRepository(FraudScoreRepository):
                     strategy_used  = score.strategy_used,
                     latency_ms     = score.latency_ms,
                     scored_at      = score.scored_at,
+                    ab_variant     = score.ab_variant,
                 )
             )
 
@@ -259,6 +262,7 @@ class SQLiteFraudScoreRepository(FraudScoreRepository):
             strategy_used  = row.strategy_used,
             latency_ms     = row.latency_ms,
             scored_at      = row.scored_at,
+            ab_variant     = getattr(row, 'ab_variant', 'champion') or 'champion',
         )
 
 

@@ -1,4 +1,4 @@
-# FraudShield MVP
+# FraudShield
 
 Real-time Card-Not-Present fraud detection. Clean architecture: Repository + Strategy + Observer patterns. SQLite → PostgreSQL / Kafka in prod — no code changes.
 

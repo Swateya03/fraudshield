@@ -18,6 +18,8 @@
 
 Most fraud ML systems are trained on **confirmed fraud labels** — but in production, most transactions are unlabeled: not confirmed fraud, but not confirmed legitimate either. FraudShield addresses this with **Elkan-Noto Positive-Unlabeled (PU) Learning**, treating unlabeled transactions as soft negatives weighted by confidence rather than hard negatives.
 
+> **Note on defaults:** PU learning is **opt-in** (`USE_PU_LEARNING=false` by default) — the standard supervised path runs unless enabled. The headline **AUC-ROC 0.94** comes from the supervised champion; the **AUC-PR 0.88** and false-positive improvements in §05 come from the PU path. Both are reported so the comparison is explicit.
+
 Full MLOps loop automated: **PSI drift detection → challenger training → AUC comparison → promotion → health check → auto-rollback**. Clean architecture: Repository + Strategy + Observer patterns. SQLite → PostgreSQL / Kafka in prod — no code changes.
 
 ---
@@ -40,7 +42,7 @@ Full MLOps loop automated: **PSI drift detection → challenger training → AUC
 | | Decision | Rationale |
 |---|---|---|
 | 🧩 **Architecture** | Repository + Strategy Pattern | Every infrastructure dependency is behind an interface. The scoring strategy (`RuleBasedStrategy` / `XGBoostStrategy`) is swappable at startup. The API doesn't know which one it's using — tests run without a model file, and production hot-reloads a new champion without restarting via `POST /v1/model/reload`. |
-| 🎓 **Training** | PU Learning over Supervised | Standard supervised training treats "not confirmed fraud" as legitimate. In practice ~40% of actual fraud is never labelled — chargebacks arrive late, small amounts go unreported. Elkan-Noto assigns confidence-weighted soft labels to unlabeled data, recovering accuracy lost to sparse-label bias. |
+| 🎓 **Training** | PU Learning over Supervised | Standard supervised training treats "not confirmed fraud" as legitimate. In practice a large share of actual fraud is never labelled — chargebacks arrive late, small amounts go unreported. Elkan-Noto assigns confidence-weighted soft labels to unlabeled data, recovering accuracy lost to sparse-label bias. Enabled via `USE_PU_LEARNING`. |
 | 🎯 **Calibration** | Platt Scaling on XGBoost | XGBoost produces well-ranked outputs but poorly calibrated probabilities at extreme thresholds. The model is wrapped in `CalibratedClassifierCV` fitted on a held-out calibration set. The BLOCK threshold (0.85) must mean "85% probability of fraud" — uncalibrated raw scores cannot be interpreted this way. |
 | 📊 **Evaluation** | GroupShuffleSplit by user_id | Train/test split is done by `user_id` group, not randomly. Random splitting leaks entity-level features (velocity history, user averages) from train to test, producing optimistic evaluation. GroupShuffleSplit ensures a user's transactions appear only in train or test, never both. |
 | 🔁 **Idempotency** | Redis-Backed Deduplication | `Idempotency-Key` header deduplicates scoring requests in Redis with 24h TTL. Safe to retry on network failure — the same key always returns the same cached response. Prevents double-scoring on client retries, which would inflate velocity features. |
@@ -167,7 +169,7 @@ calibrated.fit(X_cal, y_cal)
 
 ## 🎚 06 — Decision Thresholds
 
-Thresholds were selected from the **precision-recall curve** on the held-out test set — not chosen arbitrarily. The BLOCK threshold targets precision ≥ 0.90 (customer experience) while REVIEW targets recall ≥ 0.85 (fraud capture).
+Thresholds were selected from the **precision-recall curve** on the held-out test set — not chosen arbitrarily. The training-time selection maximises F1; the deployed BLOCK threshold targets precision ≥ 0.90 (customer experience) while REVIEW targets recall ≥ 0.85 (fraud capture).
 
 **Fraud Probability → Decision Mapping**
 
@@ -185,12 +187,15 @@ Both thresholds are configurable via env vars (`FRAUD_THRESHOLD`, `REVIEW_THRESH
 
 **Velocity features** are the highest-signal for Card-Not-Present fraud — account takeover typically generates a burst of transactions in a short window. These are computed from **Redis sorted sets at inference time** in <5ms per request. Amount features are normalised to INR and expressed as z-scores relative to the **user's own history**, not the population — a ₹1,00,000 transaction is normal for one user and suspicious for another.
 
+> These are the exact 21 features in `FeatureVector.FEATURE_NAMES` (`fraudshield_core/models.py`). Velocity windows are **1h / 6h / 24h**. Amount behaviour is captured via `amount_ratio` and `amount_zscore` (computed against the user's own expanding history); `user_avg_amount` / `user_std_amount` are intermediate columns, not model inputs.
+
 | Group | Features |
 |---|---|
-| ⚡ **Velocity** (Redis-backed, real-time) — *highest signal* | `velocity_1h` · `velocity_24h` · `velocity_7d` · `user_avg_amount` · `user_std_amount` |
+| ⚡ **Velocity** (Redis-backed, real-time) — *highest signal* | `velocity_1h` · `velocity_6h` · `velocity_24h` · `time_since_last_txn_secs` |
 | 💰 **Amount** (normalised to INR) | `log_amount` · `amount_ratio` · `amount_zscore` · `is_round_amount` |
-| 🚨 **Risk signals** | `merchant_risk` · `ip_risk` · `user_risk_tier` · `kyc_status` · `channel_risk` · `is_known_ip` |
-| 📱 **Device / time** | `device_age_days` · `is_new_device` · `hour_of_day` · `day_of_week` · `is_weekend` · `is_night` |
+| 🚨 **Risk signals** | `merchant_risk_score` · `ip_fraud_history` · `channel_risk` · `merchant_tenure_days` · `geo_mismatch` |
+| 📱 **Device / user** | `device_trust_score` · `is_new_device` · `is_new_user` · `hours_since_profile_update` |
+| 🕐 **Time** | `hour_of_day` · `day_of_week` · `is_weekend` · `is_late_night` |
 
 ---
 
@@ -198,7 +203,7 @@ Both thresholds are configurable via env vars (`FRAUD_THRESHOLD`, `REVIEW_THRESH
 
 All endpoints except `/health*` and `/metrics` require `Authorization: Bearer <API_TOKEN>`.
 
-Rate limit: **300 req/min per token** (configurable via `RATE_LIMIT_PER_SECOND`). Response headers `X-RateLimit-*` show remaining budget.
+Rate limit: **300 req/min per token** (100/sec burst; configurable via `RATE_LIMIT_PER_SECOND`). Response headers `X-RateLimit-*` show remaining budget.
 
 ### Scoring
 
@@ -356,6 +361,137 @@ Set `DRIFT_AUTO_RETRAIN=true`. When `GET /v1/drift/report` returns `RETRAIN_REQU
 Set `CHALLENGER_MODEL_VERSION` and `CHALLENGER_TRAFFIC_PCT` in `.env`. The model poll thread (every 30s) auto-promotes the challenger when its AUC exceeds the champion's by ≥ `AB_PROMOTE_THRESHOLD` (default `0.01`).
 
 ---
+
+## 🛡 12 — Auto-Rollback
+
+Every promotion saves the previous champion as `PREVIOUS`. The rollback script runs two check modes in sequence — if either fails, the previous version is automatically restored.
+
+| Check Mode | What it validates | Thresholds |
+|---|---|---|
+| 🗄 **Offline Check** — Training Metric Thresholds | Validates champion's training metrics against minimum floors. Catches dangerously weak models promoted by accident. | • AUC-ROC ≥ 0.70<br>• Precision ≥ 0.60 |
+| 📊 **Online Check (Prometheus)** — Live Production Metrics | Queries live metrics over a 30-minute window. Catches miscalibrated or slow models that passed offline checks. | • Block-rate deviation ≤ 15pp from training fraud_rate<br>• SLA breach rate ≤ 5% |
+
+| Check | Threshold | Notes |
+|---|---|---|
+| AUC-ROC (offline) | < 0.70 | Catastrophically weak model |
+| Precision (offline) | < 0.60 | Too many false positives |
+| Block rate deviation (online) | > 15 pp from training fraud_rate | Miscalibrated |
+| SLA breach rate (online) | > 5% requests > 200 ms | Latency regression |
+
+```console
+# Validated against a deliberately degraded model (AUC 0.68)
+$ python scripts/auto_rollback.py --dry-run
+
+  [OFFLINE] AUC-ROC:   0.68  <  0.70   FAIL
+  [OFFLINE] Precision: 0.71  ≥  0.60   PASS
+
+  Offline check FAILED. Previous champion available.
+  Rolling back to v1.0.0...
+
+Exit code: 2  (rollback triggered)
+Rollback completed in 1.8s
+```
+
+Exit codes: `0` = healthy, `2` = rollback triggered.
+
+---
+
+## 📊 Prometheus Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `fraudshield_decisions_total` | Counter | Per `decision` + `strategy` |
+| `fraudshield_score` | Histogram | Raw fraud score distribution |
+| `fraudshield_scoring_latency_seconds` | Histogram | End-to-end scoring time |
+| `fraudshield_sla_breaches_total` | Counter | Decisions > 200 ms |
+| `fraudshield_model_info` | Gauge | Currently loaded version + strategy |
+| `fraudshield_psi_score` | Gauge | Per-feature PSI (Drift Monitor) |
+| `fraudshield_score_by_variant_bucket` | Histogram | A/B score distribution per variant |
+
+---
+
+## 🧪 Running Tests
+
+```bash
+pytest tests/ -v --tb=short                   # unit + integration (no Redis needed)
+docker-compose up -d redis
+pytest tests/test_redis_features.py -v        # Redis velocity + idempotency tests
+cd dashboard && npm test                      # frontend component tests (jsdom)
+locust -f tests/locustfile.py --host http://localhost:8000   # load test
+```
+
+Test files: `test_api.py`, `test_scoring.py`, `test_repository.py`, `test_redis_features.py`, `test_scorer_properties.py`, `test_contract.py`.
+
+---
+
+## 🔧 Key Config (`.env`)
+
+<details>
+<summary><b>Click to expand full configuration table</b></summary>
+
+| Variable | Default | Effect |
+|---|---|---|
+| `API_TOKEN` | `dev_token_...` | Bearer token for all API calls |
+| `FRAUD_THRESHOLD` | `0.85` | Score ≥ this → block |
+| `REVIEW_THRESHOLD` | `0.50` | Score ≥ this → review |
+| `RATE_LIMIT_PER_SECOND` | `100` | Per-second burst limit (≈ 300/min per token sustained) |
+| `DRIFT_AUTO_RETRAIN` | `false` | Auto-queue retrain on drift |
+| `AB_PROMOTE_THRESHOLD` | `0.01` | Min AUC delta to auto-promote challenger |
+| `CHALLENGER_MODEL_VERSION` | `` | Enable A/B routing |
+| `CHALLENGER_TRAFFIC_PCT` | `0.0` | Fraction of traffic to challenger |
+| `WEBHOOK_URL` | `` | POST target for fraud decisions |
+| `WEBHOOK_EVENTS` | `block` | Which decisions trigger webhook (`block,review,allow`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `` | Enable OTel tracing (Jaeger) |
+| `PSI_THRESHOLD` | `0.20` | PSI above this = RETRAIN_REQUIRED |
+| `DRIFT_CHECK_WINDOW_DAYS` | `7` | Recency window for PSI |
+| `MODEL_REGISTRY_PATH` | `local_store/model_registry` | Where versioned models live |
+| `MLFLOW_TRACKING_URI` | `local_store/mlruns` | MLflow experiment tracking |
+| `USE_PU_LEARNING` | `false` | PU Learning for training with unlabeled negatives (opt-in) |
+
+</details>
+
+---
+
+## ✅ 13 — Production Readiness
+
+Things most portfolio projects skip that are already built:
+
+- ✅ **Idempotency** — `Idempotency-Key` header deduplicates scoring requests in Redis (24h TTL). Safe to retry on network failure.
+- ✅ **SCD Type-2 Audit Trail** — Every analyst override to `user_risk_tier` is append-only — full history queryable via `/v1/users/{id}/history`.
+- ✅ **Hot Model Reload** — `POST /v1/model/reload` promotes a new champion without restarting. Zero-downtime model updates.
+- ✅ **K8s Health Probes** — `/health/live` (liveness) and `/health/ready` (readiness) return correct HTTP codes — drop-in for Kubernetes.
+- ✅ **Rate Limiting** — 300 req/min per token with `X-RateLimit-*` response headers. `429` with Retry-After on breach.
+- ✅ **Property-Based Tests** — Hypothesis generates 100 random feature vectors and asserts scoring invariants — score always in [0,1], decision always consistent.
+- ✅ **OpenTelemetry** — Distributed tracing to Jaeger when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Zero-overhead when unset.
+- ✅ **A/B Champion/Challenger** — Set `CHALLENGER_TRAFFIC_PCT` to route a fraction of traffic to a challenger. Auto-promotes when AUC delta ≥ threshold.
+
+---
+
+## 🛤 14 — Path to Production
+
+One-line swaps in `main.py` — business logic never changes, only infrastructure bindings:
+
+| Component | MVP | | Production |
+|---|---|---|---|
+| Database | `SQLiteUserRepository` | → | `PostgreSQLUserRepository` |
+| Event bus | `InMemoryPublisher` | → | `RedisStreamsPublisher` / Kafka |
+| Model registry | Local files + MLflow | → | SageMaker Model Registry |
+| Feature store | Redis dict | → | Feast / Tecton |
+| Scheduler | GitHub Actions cron | → | Airflow DAG |
+| Secrets | `.env` file | → | Vault / AWS Secrets Manager |
+| Observability | Prometheus + Grafana | → | Same — no change needed |
+
+---
+
+## ⚠️ 15 — Known Limitations
+
+- ⚠️ **Synthetic training data** — the model has not been validated on real-world production transactions. AUC-ROC 0.94 and precision 0.91 are optimistic estimates on synthetic data. Real-world performance will differ until enough labelled chargebacks accumulate via `/v1/labels`.
+- ⚠️ **Entity-grouped but not time-ordered splits** — the train/test split is grouped by `user_id` (closing entity leakage) but has no temporal boundary — no sort-then-cut on `created_at`, no `TimeSeriesSplit`. On the synthetic, roughly-stationary data this is nearly harmless, but on real data with evolving fraud, concept drift can leak across the boundary and inflate offline metrics. A temporal cutoff (train = past, test = future) should be layered on before real deployment.
+- ⚠️ **No hyperparameter search** — model hyperparameters (tree depth, learning rate, estimator count) are fixed sane defaults, not searched. Formal model selection (grid / random / Bayesian) isn't run; on real data the optimal settings shift with the true fraud rate and should be tuned, ideally inside the retrain loop.
+- ⚠️ **F1-based threshold selection vs asymmetric cost** — the training-time threshold maximises F1, which weights precision and recall equally. Fraud costs are asymmetric (a missed fraud costs more than a false decline), so the principled objective is F-beta (β > 1) or minimising expected cost directly, once real chargeback dollars are known. The deployed BLOCK/REVIEW thresholds already reflect the asymmetry; the selection objective does not yet.
+- ⚠️ **Static FX rates** — currency normalisation uses fixed exchange rates (`FX_USD`, `FX_EUR` env vars). Stale rates introduce a systematic amount bias in INR-normalised features, particularly `amount_zscore`.
+- ⚠️ **Cold-start users** — new users have no velocity history (`velocity_*` = 0). The model falls back to merchant/channel/IP signals. Scores for first-time users are less reliable and tend toward the prior.
+- ⚠️ **PSI detects feature drift, not label drift** — recall and precision degradation require human monitoring of analyst-labelled transactions. PSI can be stable while the model's discrimination deteriorates if fraud patterns change without distribution shift (concept drift with `P(x)` held fixed).
 
 ## 🛡 12 — Auto-Rollback
 

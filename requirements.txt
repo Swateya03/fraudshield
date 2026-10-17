@@ -55,7 +55,7 @@ prometheus-client==0.20.0  # /metrics endpoint + counters/histograms
 opentelemetry-sdk==1.41.1                      # OTel core SDK
 opentelemetry-instrumentation-fastapi==0.62b1  # auto-instrument FastAPI routes
 opentelemetry-instrumentation-sqlalchemy==0.62b1  # auto-instrument SQLAlchemy queries
-opentelemetry-exporter-otlp-proto-grpc==1.41.1  # OTLP gRPC exporter → Jaeger / collector
+opentelemetry-exporter-otlp-proto-grpc==1.42.1  # OTLP gRPC exporter → Jaeger / collector
 
 # ─── Utilities ───────────────────────────────
 python-json-logger==2.0.7

@@ -17,10 +17,10 @@ redis==5.0.3
 
 # ─── ML ──────────────────────────────────────
 xgboost==2.0.3
-scikit-learn==1.5.2        # 1.4.1 has no cp313 wheels
-shap==0.48.0               # feature importance / explainability
+scikit-learn==1.9.0        # 1.4.1 has no cp313 wheels
+shap==0.51.0               # feature importance / explainability
 pandas==2.2.3
-numpy==2.2.2               # 1.26.x has no cp313 wheels; pairs with mlflow 2.18+
+numpy==2.4.6               # 1.26.x has no cp313 wheels; pairs with mlflow 2.18+
 
 # ─── MLflow ──────────────────────────────────
 mlflow==2.18.0             # 2.11.x pins numpy<2 (conflicts with numpy 2 on 3.13)

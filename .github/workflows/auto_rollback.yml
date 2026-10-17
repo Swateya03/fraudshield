@@ -56,7 +56,7 @@ jobs:
       # The retrain loop uploads the registry as an artifact so we can inspect
       # the promoted model without re-training.
       - name: Download model registry artifact
-        uses: dawidd6/action-download-artifact@v3
+        uses: dawidd6/action-download-artifact@v21
         with:
           workflow: retrain_loop.yml
           name_is_regexp: true
